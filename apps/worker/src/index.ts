@@ -1,13 +1,8 @@
 import { prisma } from "@wordbee/db";
+import { closeProductionLineQueue } from "@wordbee/shared";
 import { createRedisConnection } from "./redis.js";
+import { startProductionLineWorker, syncActiveLines } from "./production-line-worker.js";
 
-/**
- * Placeholder do worker BullMQ. A fila/agendador de Linhas de Produção
- * (repeatable jobs, lock por linha, concorrência por provedor de IA) é
- * implementada no PROMPT 3 do PRD. Por enquanto, este processo apenas
- * valida a conectividade com Postgres e Redis ao subir, para que o
- * scaffold do monorepo já rode ponta a ponta.
- */
 async function main() {
   const redis = createRedisConnection();
 
@@ -17,10 +12,15 @@ async function main() {
   await prisma.$queryRaw`SELECT 1`;
   console.log("[worker] Postgres conectado.");
 
-  console.log("[worker] Pronto. Aguardando implementação da fila (PROMPT 3).");
+  await syncActiveLines();
+
+  const bullWorker = startProductionLineWorker(redis);
+  console.log("[worker] Processador de Linhas de Produção pronto.");
 
   const shutdown = async () => {
     console.log("[worker] Encerrando...");
+    await bullWorker.close();
+    await closeProductionLineQueue();
     await redis.quit();
     await prisma.$disconnect();
     process.exit(0);
