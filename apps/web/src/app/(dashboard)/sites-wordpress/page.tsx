@@ -1,27 +1,24 @@
-import { Globe } from "lucide-react";
-import { PageHeader } from "@/components/layout/PageHeader";
-import { Card, CardContent } from "@/components/ui/Card";
-import { EmptyState } from "@/components/ui/EmptyState";
-import { Button } from "@/components/ui/Button";
+import { redirect } from "next/navigation";
+import { prisma } from "@wordbee/db";
+import { getCurrentSession } from "@/lib/auth";
+import { SitesClient } from "@/components/wp-sites/SitesClient";
 
-export default function SitesWordpressPage() {
+export default async function SitesWordpressPage() {
+  const session = await getCurrentSession();
+  if (!session) redirect("/login");
+
+  const sites = await prisma.wpSite.findMany({
+    where: { userId: session.user.id },
+    orderBy: { nome: "asc" },
+    select: { id: true, nome: true, url: true, usuario: true, lastTestAt: true, lastTestOk: true, lastTestError: true },
+  });
+
   return (
-    <div>
-      <PageHeader
-        title="Sites WordPress"
-        subtitle="Gerencie os blogs onde seus artigos serão publicados."
-        action={<Button disabled>+ Novo site</Button>}
-      />
-      <Card>
-        <CardContent>
-          <EmptyState
-            icon={Globe}
-            title="Nenhum site cadastrado"
-            description="Adicione seu primeiro site WordPress para começar."
-            action={<Button disabled>Cadastrar site</Button>}
-          />
-        </CardContent>
-      </Card>
-    </div>
+    <SitesClient
+      initialSites={sites.map((s) => ({
+        ...s,
+        lastTestAt: s.lastTestAt?.toISOString() ?? null,
+      }))}
+    />
   );
 }
