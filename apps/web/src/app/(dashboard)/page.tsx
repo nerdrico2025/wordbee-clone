@@ -1,8 +1,10 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { FileText, Globe, TrendingUp, PenSquare, KeyRound, History, ExternalLink, AlertTriangle } from "lucide-react";
+import { FileText, Globe, TrendingUp, PenSquare, KeyRound, History, ExternalLink, AlertTriangle, Circle } from "lucide-react";
 import { prisma } from "@wordbee/db";
+import { getWorkerHealth } from "@wordbee/shared";
 import { getCurrentSession } from "@/lib/auth";
+import { getRedis } from "@/lib/redis";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Card, CardContent } from "@/components/ui/Card";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -43,9 +45,15 @@ export default async function DashboardPage() {
     }),
   ]);
 
+  const workerHealth = await getWorkerHealth(getRedis()).catch(() => ({ online: false, lastSuccessAt: null }));
+
   return (
     <div>
-      <PageHeader title="Dashboard" subtitle="Visão geral da sua produção de conteúdo." />
+      <PageHeader
+        title="Dashboard"
+        subtitle="Visão geral da sua produção de conteúdo."
+        action={<WorkerHealthBadge online={workerHealth.online} lastSuccessAt={workerHealth.lastSuccessAt} />}
+      />
 
       {linhasComAlerta.length > 0 && (
         <div className="mb-6 flex items-start gap-3 rounded-card border border-red-200 bg-red-50 p-4 dark:border-red-900/50 dark:bg-red-500/10">
@@ -162,6 +170,21 @@ export default async function DashboardPage() {
           </CardContent>
         </Card>
       </div>
+    </div>
+  );
+}
+
+function WorkerHealthBadge({ online, lastSuccessAt }: { online: boolean; lastSuccessAt: Date | null }) {
+  const lastSuccessLabel = lastSuccessAt
+    ? lastSuccessAt.toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" })
+    : "nunca";
+  return (
+    <div
+      className="flex items-center gap-2 rounded-full border border-zinc-200 bg-white px-3 py-1.5 text-xs text-zinc-500 dark:border-graphite-700/60 dark:bg-graphite-800 dark:text-zinc-400"
+      title={`Última publicação bem-sucedida: ${lastSuccessLabel}`}
+    >
+      <Circle className={`h-2.5 w-2.5 ${online ? "fill-emerald-500 text-emerald-500" : "fill-red-500 text-red-500"}`} />
+      Worker {online ? "online" : "offline"}
     </div>
   );
 }

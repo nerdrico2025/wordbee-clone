@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/Input";
 import { Select } from "@/components/ui/Select";
 import { Textarea } from "@/components/ui/Textarea";
 import { Button } from "@/components/ui/Button";
+import { useToast } from "@/components/ui/Toast";
 import { ARTICLE_TYPE_OPTIONS, type ArticleTypeValue } from "@/lib/article-type-options";
 import { INTERVAL_OPTIONS } from "@/lib/interval-options";
 import type { CategoryOption, ProviderOption, SiteOption } from "@/lib/criar-artigo-types";
@@ -22,6 +23,7 @@ interface Props {
 }
 
 export function NewLineModal({ open, onOpenChange, sites, textProviders, imageProviders, onCreated }: Props) {
+  const { toast } = useToast();
   const [nome, setNome] = useState("");
   const [wpSiteId, setWpSiteId] = useState(sites[0]?.id ?? "");
   const [categorias, setCategorias] = useState<CategoryOption[] | null>(null);
@@ -127,8 +129,11 @@ export function NewLineModal({ open, onOpenChange, sites, textProviders, imagePr
 
       onCreated(data.line);
       onOpenChange(false);
+      toast({ title: "Linha de produção criada.", variant: "success" });
     } catch (err) {
-      setError((err as Error).message);
+      const message = (err as Error).message;
+      setError(message);
+      toast({ title: "Não foi possível criar a linha.", description: message, variant: "error" });
     } finally {
       setLoading(false);
     }

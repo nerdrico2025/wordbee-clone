@@ -6,6 +6,7 @@ import { Card, CardContent } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { PasswordInput } from "@/components/ui/Input";
 import { Button } from "@/components/ui/Button";
+import { useToast } from "@/components/ui/Toast";
 import type { ApiKeyCard, Capability } from "@/lib/api-keys";
 
 export function ProviderCard({
@@ -17,6 +18,7 @@ export function ProviderCard({
   capability: Capability;
   onSaved: (cards: { texto: ApiKeyCard[]; imagem: ApiKeyCard[] }) => void;
 }) {
+  const { toast } = useToast();
   const [value, setValue] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -38,8 +40,11 @@ export function ProviderCard({
       onSaved(data);
       setValue("");
       setSuccess(true);
+      toast({ title: `Chave do ${card.nome} salva.`, description: "Validada com sucesso junto ao provedor.", variant: "success" });
     } catch (err) {
-      setError((err as Error).message);
+      const message = (err as Error).message;
+      setError(message);
+      toast({ title: `Não foi possível salvar a chave do ${card.nome}.`, description: message, variant: "error" });
     } finally {
       setLoading(false);
     }

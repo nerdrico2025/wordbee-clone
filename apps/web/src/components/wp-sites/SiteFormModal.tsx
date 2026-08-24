@@ -4,6 +4,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { Modal } from "@/components/ui/Modal";
 import { Input, PasswordInput } from "@/components/ui/Input";
 import { Button } from "@/components/ui/Button";
+import { useToast } from "@/components/ui/Toast";
 import type { WpSiteSummary } from "@/lib/wp-sites-types";
 
 export function SiteFormModal({
@@ -17,6 +18,7 @@ export function SiteFormModal({
   site: WpSiteSummary | null;
   onSaved: (site: WpSiteSummary) => void;
 }) {
+  const { toast } = useToast();
   const isEdit = !!site;
   const [nome, setNome] = useState("");
   const [url, setUrl] = useState("");
@@ -52,8 +54,11 @@ export function SiteFormModal({
       if (!res.ok) throw new Error(data.error ?? "Não foi possível salvar o site.");
       onSaved(data.site);
       onOpenChange(false);
+      toast({ title: isEdit ? "Site atualizado." : "Site cadastrado.", variant: "success" });
     } catch (err) {
-      setError((err as Error).message);
+      const message = (err as Error).message;
+      setError(message);
+      toast({ title: "Não foi possível salvar o site.", description: message, variant: "error" });
     } finally {
       setLoading(false);
     }

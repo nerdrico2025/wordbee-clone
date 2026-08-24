@@ -8,6 +8,7 @@ import { Input } from "@/components/ui/Input";
 import { Textarea } from "@/components/ui/Textarea";
 import { Button } from "@/components/ui/Button";
 import { ProgressSteps, type StepState } from "@/components/criar-artigo/ProgressSteps";
+import { useToast } from "@/components/ui/Toast";
 import { ARTICLE_TYPE_OPTIONS, type ArticleTypeValue } from "@/lib/article-type-options";
 import type { CategoryOption, ProviderOption, ProviderValue, SiteOption } from "@/lib/criar-artigo-types";
 
@@ -20,6 +21,7 @@ interface Props {
 type PipelineEvent = { step: string; status: "start" | "done" | "error"; [key: string]: unknown };
 
 export function CriarArtigoForm({ sites, textProviders, imageProviders }: Props) {
+  const { toast } = useToast();
   const [wpSiteId, setWpSiteId] = useState(sites[0]?.id ?? "");
   const [categorias, setCategorias] = useState<CategoryOption[] | null>(null);
   const [categoriasLoading, setCategoriasLoading] = useState(false);
@@ -133,10 +135,15 @@ export function CriarArtigoForm({ sites, textProviders, imageProviders }: Props)
     } else if (event.status === "done") {
       setProgress((prev) => ({ ...prev, [event.step]: "done" }));
       if (event.step === "titulo" && typeof event.titulo === "string") setTitulo(event.titulo);
-      if (event.step === "publicando" && typeof event.wpUrl === "string") setResultLink(event.wpUrl);
+      if (event.step === "publicando" && typeof event.wpUrl === "string") {
+        setResultLink(event.wpUrl);
+        toast({ title: "Artigo gerado com sucesso!", variant: "success" });
+      }
     } else if (event.status === "error") {
       setProgress((prev) => ({ ...prev, [event.step]: "error" }));
-      setErrorMessage(typeof event.message === "string" ? event.message : "Erro ao gerar o artigo.");
+      const message = typeof event.message === "string" ? event.message : "Erro ao gerar o artigo.";
+      setErrorMessage(message);
+      toast({ title: "Não foi possível gerar o artigo.", description: message, variant: "error" });
     }
   }
 
