@@ -2,6 +2,12 @@
 
 Registro de decisões tomadas de forma autônoma diante de ambiguidades do PRD, conforme a regra 3 do prompt de contexto. Cada entrada tem uma linha de justificativa.
 
+## Deploy na Vercel — correção do build do monorepo
+
+- **Bug real encontrado no primeiro deploy na Vercel**: `Module not found: Can't resolve '@wordbee/db'`. Causa: a Vercel roda o build com "Root Directory" = `apps/web` (suporte nativo dela a monorepos — instala a partir da raiz do workspace, mas builda a partir do subdiretório), então `npm run build` executava só o script do `apps/web/package.json` (`next build`), pulando o script raiz `build:libs` que compila `packages/shared` e `packages/db` para `dist/` antes. Localmente isso nunca apareceu porque sempre rodamos o build a partir da raiz do monorepo.
+  - **Corrigido tornando `apps/web/package.json`'s `build` autossuficiente**: `"build": "cd ../.. && npm run build:libs && cd apps/web && dotenv -e ../../.env -- next build"` — funciona não importa de onde a plataforma de deploy invoque `npm run build` (raiz ou `apps/web`), sem depender de configurar corretamente o "Root Directory"/"Build Command" no painel da Vercel. Testado localmente simulando exatamente o comportamento da Vercel (build direto de dentro de `apps/web`, sem `dist/` pré-existente).
+- **`output: "standalone"` desativado automaticamente na Vercel** (`process.env.VERCEL ? undefined : "standalone"`): esse modo é só para o deploy via Docker/VPS, onde `apps/web/Dockerfile` espera `.next/standalone`. A Vercel usa seu próprio empacotamento serverless e não precisa (nem deveria receber) esse output — a Vercel define `VERCEL=1` automaticamente em todo build, então a mesma base de código serve os dois destinos sem arquivo de config separado.
+
 ## PROMPT 4 — Fidelidade visual, robustez e deploy
 
 - **SSRF completo com resolução de DNS** (`assertSafeWordPressUrl` em `packages/shared/src/wordpress/url-guard.ts`): além do bloqueio de IP/hostname literal (PROMPT 2), agora resolve o hostname via `dns.promises.lookup` e bloqueia se qualquer endereço resolvido cair em faixa privada — impede que um domínio público aponte (ou seja re-apontado depois, DNS rebinding) para a rede interna. Não elimina 100% o TOCTOU entre a checagem e a conexão (exigiria fixar o IP resolvido no socket do fetch), mas cobre o caso prático relevante para um app pessoal. 5 novos testes.

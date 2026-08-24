@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "scripts": {
     "dev": "dotenv -e ../../.env -- next dev",
-    "build": "dotenv -e ../../.env -- next build",
+    "build": "cd ../.. && npm run build:libs && cd apps/web && dotenv -e ../../.env -- next build",
     "start": "next start",
     "lint": "eslint . --max-warnings=0",
     "typecheck": "tsc -p tsconfig.json --noEmit"
