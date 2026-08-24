@@ -145,6 +145,21 @@ Estado da build do clone pessoal do Wordbee. Atualizado ao final de cada prompt.
 ### Qualidade
 - `npm run typecheck`, `npm run build` (web + worker + libs) e testes (70/70) limpos. Lint sem erros/avisos. Build Docker das duas imagens validado de ponta a ponta.
 
+### ✅ Validação real ponta a ponta em produção — Vercel (feita em 2026-08-24)
+- **URL de produção correta**: `https://wordbee-clone-chi.vercel.app` — é o domínio de produção padrão da Vercel, diferente das URLs por-deploy que a API de Deployments do GitHub reporta (essas continuam atrás do SSO da Vercel por padrão; é o comportamento esperado do "Standard Protection", que só isenta o domínio de produção "oficial"/customizado, não os aliases de deploy individuais).
+- Testado via requisições HTTP diretas (`curl`, com sessão/cookie reais) em vez de navegador — a extensão Claude in Chrome não foi instalada nesta sessão. Cobre exatamente as mesmas rotas de API e sessão que a UI usa, mas sem confirmação visual de renderização/CSS.
+- **(1) Produção acessível sem SSO**: confirmado. `GET /login` responde `200` direto, sem redirect para `vercel.com/sso-api`.
+- **(2) Login real**: confirmado. `POST /api/auth/login` com as credenciais do usuário seedado no Neon (`ADMIN_EMAIL`/`ADMIN_PASSWORD` do `.env`) retornou sessão válida (cookie `wordbee_session` httpOnly); todas as rotas do painel foram de `307` (redirect para `/login`, sem sessão) para `200` depois de autenticar.
+- **(3) Telas testadas** (todas `200`, autenticado):
+  - **Dashboard** (`/`) — OK.
+  - **Chaves de API** (`/chaves-de-api`, `GET /api/api-keys`) — OK. Lista os 4 provedores (OpenAI, Gemini, Grok, Stability); nenhuma chave configurada em produção ainda (`configured:false` em todos).
+  - **Sites WordPress** (`/sites-wordpress`) — CRUD completo testado: criado um site de teste, ação "Testar" retornou corretamente `ok:false` com a mensagem de erro esperada (domínio inexistente), excluído ao final — sem lixo deixado em produção.
+  - **Linhas de Produção** (`/linhas-de-producao`) — tela carrega OK (lista vazia, banco de produção limpo).
+  - **Perfil** (`/perfil`, `GET /api/profile`) — OK, retorna os dados do usuário seedado.
+  - **Criar Artigo** (`/criar-artigo`) — validação de formulário testada (payload vazio → `400` com erro do Zod); fluxo completo testado com um site WordPress temporário (criado e removido só para esse teste): sem chave de IA configurada, o pipeline retorna corretamente `{step:"titulo", status:"error", message:"Nenhuma chave de IA de texto configurada para este provedor."}` via streaming NDJSON.
+- **(4) Geração unitária não depende do worker**: confirmado, tanto pelo código quanto pelo teste acima rodando com o worker inteiramente fora do ar. `POST /api/articles/generate` chama `runUnitArticlePipeline` diretamente dentro da própria rota do Next.js (síncrono, streaming) — nunca passa pela fila BullMQ nem pelo processo do worker. Só as **Linhas de Produção** (execução automática/agendada) dependem do worker estar rodando em algum host always-on (ver `VERCEL-ENV.md`).
+- Não havia chave de IA de teste configurada em produção, então não foi possível (nem tentado) gerar um artigo de verdade — só o caminho de validação/erro foi exercitado, conforme combinado.
+
 ## Como rodar localmente
 
 ```bash
