@@ -1,0 +1,22 @@
+# DECISIONS.md
+
+Registro de decisões tomadas de forma autônoma diante de ambiguidades do PRD, conforme a regra 3 do prompt de contexto. Cada entrada tem uma linha de justificativa.
+
+## PROMPT 1 — Fundação
+
+- **Gerenciador de pacotes: npm workspaces.** Já disponível no ambiente, zero instalação extra, suporte nativo a monorepo suficiente para o escopo do projeto.
+- **ORM: Prisma** (o PRD permitia Prisma ou Drizzle). Prisma tem migrations maduras e o schema da seção 5 do PRD mapeia diretamente para `schema.prisma`.
+- **Prisma na major 5 (5.22.x), não a 7.x mais recente.** Evita churn de duas majors no meio da construção; 5.x é estável e bem documentada. Revisitar upgrade pós-MVP.
+- **Hash de senha: Argon2** via `@node-rs/argon2` (binário nativo pré-compilado, sem node-gyp). PRD permitia argon2 ou bcrypt; argon2 é a recomendação atual da OWASP.
+- **Sessão: JWT assinado (HS256, `jose`) + registro em `sessions` no Postgres**, não NextAuth (proibido pelo PRD) e não JWT puro sem estado. Precisamos revogar sessões individualmente (RF-02 "sessões ativas"), o que um JWT stateless sozinho não permite.
+- **Auth em duas camadas.** O middleware (Edge runtime no Next 14, sem acesso a Postgres) faz apenas a checagem rápida de assinatura/expiração do JWT. A checagem autoritativa (sessão revogada?) acontece em `getCurrentSession()` (Node.js runtime), chamada pelo layout do painel e por cada rota de API. Necessário porque o Next 14 não roda middleware em runtime Node.js.
+- **Componentes de UI acessíveis via Radix UI** (Dialog, Tabs, Toast, Switch) em vez de implementar do zero. O PRD exige navegação por teclado, ESC para fechar modais e trap de foco — Radix entrega isso pronto e testado.
+- **Tema claro/escuro: `next-themes` (localStorage) como fonte da verdade para a UI**, com sincronização best-effort para a coluna `users.tema_ui` a cada troca (fire-and-forget). Evita complexidade de flash-of-wrong-theme no SSR mantendo o campo do schema útil/persistido.
+- **Compartilhamento de chave de API (RF-13):** constraint única em `(userId, provider, tipo)`. OpenAI e Gemini salvam com `tipo=AMBOS` (uma linha só, usada nas duas abas). Grok e Stability mantêm linhas separadas por tipo, já que o PRD só cita OpenAI/Gemini como provedores de chave compartilhada.
+- **Next.js fixado em `^14.2.35`** (última patch da série 14.2), não Next 15/16. Elimina a maior parte dos CVEs conhecidos sem forçar uma migração disruptiva do App Router no meio da construção. Os achados residuais do `npm audit` (principalmente avisos ligados a Server Actions/RSC cache que não usamos e a um CVE moderado do esbuild que só afeta o dev server) foram aceitos como risco baixo para um app pessoal, single-user, sem CDN na frente, atrás de login — revisitar upgrade para Next 15+ como melhoria futura.
+- **`export const dynamic = "force-dynamic"` no layout raiz.** O app inteiro é pessoal e autenticado (saudação por usuário, sessão via cookie) — nada deveria ser pré-renderizado estaticamente. Isso também contorna um bug conhecido do Next.js 14 (`Error: <Html> should not be imported outside of pages/_document` ao gerar `/404`/`/500` estaticamente); ver nota abaixo.
+- **Regra dura: nunca definir `NODE_ENV` no `.env`.** Causou o bug acima quando o `dotenv-cli` injetava `NODE_ENV=development` durante `next build` (que precisa rodar como produção). O `next dev`/`build`/`start` e o worker já definem o valor certo sozinhos; documentado em `.env.example`.
+- **Resolução dos pacotes internos (`@wordbee/shared`, `@wordbee/db`):** `package.json` expõe tanto `dist/` compilado (usado por produção e por typecheck) quanto o TypeScript fonte via export condition `"development"` (usado por `tsx`/Next em dev). Como nem toda ferramenta ativa essa condition de forma confiável, os scripts `dev`/`dev:worker`/`typecheck`/`build` sempre rodam `build:libs` primeiro para garantir que `dist/` exista.
+- **Redis reaproveitado** para BullMQ (worker) e para rate limiting de login (web) — uma única peça de infra a mais, em vez de outra store separada.
+- **Dashboard do Prompt 1 é esqueleto estático** (métricas zeradas, sem consulta ao banco). Dados reais são escopo explícito do PROMPT 2 ("DASHBOARD REAL") no documento de prompts.
+- **Sem pasta `/referencia` com screenshots do Wordbee** no projeto (mencionada como opcional nas Observações do documento de prompts). A fidelidade visual seguiu a descrição textual do PROMPT 0 (sidebar roxo/grafite, cards brancos raio ~12px, gradiente roxo→magenta, etc.).
