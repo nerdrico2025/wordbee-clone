@@ -1,0 +1,12 @@
+**/node_modules
+**/.next
+**/dist
+.git
+.env
+.env.local
+backups
+storage/uploads/*
+!storage/uploads/.gitkeep
+*.log
+npm-debug.log*
+.DS_Store

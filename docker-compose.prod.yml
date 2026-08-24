@@ -1,0 +1,70 @@
+# Docker Compose de produção — app web + worker + Postgres + Redis num VPS único.
+# Uso: ver README.md ("Deploy no VPS").
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: wordbee
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?defina POSTGRES_PASSWORD no .env}
+      POSTGRES_DB: wordbee
+    volumes:
+      - wordbee_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wordbee"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - wordbee_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://wordbee:${POSTGRES_PASSWORD:?}@postgres:5432/wordbee
+      REDIS_URL: redis://redis:6379
+    ports:
+      - "3000:3000"
+    volumes:
+      - wordbee_uploads:/repo/storage/uploads
+
+  worker:
+    build:
+      context: .
+      dockerfile: apps/worker/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://wordbee:${POSTGRES_PASSWORD:?}@postgres:5432/wordbee
+      REDIS_URL: redis://redis:6379
+    volumes:
+      - wordbee_uploads:/repo/storage/uploads
+
+volumes:
+  wordbee_postgres_data:
+  wordbee_redis_data:
+  wordbee_uploads:
