@@ -71,6 +71,12 @@ export async function* runUnitArticlePipeline(params: UnitPipelineParams): Async
       tipo: params.tipo,
       origem: "MANUAL",
       status: "PROCESSANDO",
+      iaTexto: params.iaTexto,
+      iaImagem: params.iaImagem,
+      categoriaWpId: params.categoriaWpId,
+      wpStatusAlvo: params.statusWp,
+      tema: params.tema,
+      promptCustomizado: params.promptCustomizado,
     },
   });
 
@@ -98,28 +104,29 @@ export async function* runUnitArticlePipeline(params: UnitPipelineParams): Async
     yield await fail("conteudo", err);
     return;
   }
+  // Persiste o que já foi gerado — permite reenvio sem regerar o conteúdo à toa.
+  await prisma.article.update({ where: { id: article.id }, data: { titulo: finalTitulo, contentHtml, excerpt, slug } });
   yield { step: "conteudo", status: "done" };
 
-  // 3. Imagem
+  // 3. Imagem + upload
   yield { step: "imagem", status: "start" };
-  let imageBase64: string;
-  let imageMimeType: string;
+  let media: { id: number; sourceUrl: string };
   try {
     const imagem = await imageProvider.generateImage({ prompt: buildImagePrompt(finalTitulo, params.tema) });
-    imageBase64 = imagem.base64;
-    imageMimeType = imagem.mimeType;
+    const creds = await getSiteCredentials(params.userId, params.wpSiteId);
+    const ext = imagem.mimeType === "image/jpeg" ? "jpg" : "png";
+    media = await uploadMedia(creds, { filename: `${slug || "imagem"}.${ext}`, mimeType: imagem.mimeType, data: Buffer.from(imagem.base64, "base64") });
   } catch (err) {
     yield await fail("imagem", err);
     return;
   }
+  await prisma.article.update({ where: { id: article.id }, data: { imageUrl: media.sourceUrl, wpMediaId: media.id } });
   yield { step: "imagem", status: "done" };
 
   // 4. Publicando
   yield { step: "publicando", status: "start" };
   try {
     const creds = await getSiteCredentials(params.userId, params.wpSiteId);
-    const ext = imageMimeType === "image/jpeg" ? "jpg" : "png";
-    const media = await uploadMedia(creds, { filename: `${slug || "imagem"}.${ext}`, mimeType: imageMimeType, data: Buffer.from(imageBase64, "base64") });
     const post = await createPost(creds, {
       title: finalTitulo,
       contentHtml,
@@ -133,11 +140,6 @@ export async function* runUnitArticlePipeline(params: UnitPipelineParams): Async
     await prisma.article.update({
       where: { id: article.id },
       data: {
-        titulo: finalTitulo,
-        contentHtml,
-        excerpt,
-        slug,
-        imageUrl: media.sourceUrl,
         wpPostId: post.id,
         wpUrl: post.link,
         status: params.statusWp === "PUBLISH" ? "PUBLICADO" : "RASCUNHO",
@@ -156,4 +158,82 @@ function toUserMessage(err: unknown): string {
   if (err instanceof WordPressError) return err.userMessage;
   if (err instanceof Error) return err.message;
   return "Erro inesperado ao gerar o artigo.";
+}
+
+/**
+ * Reenvia um artigo com falha (RF-32). Reaproveita o que já foi gerado
+ * (conteúdo, imagem já enviada ao WordPress) em vez de regerar à toa —
+ * só refaz a etapa que efetivamente falhou da última vez.
+ */
+export async function resendArticle(userId: string, articleId: string): Promise<{ ok: true; wpUrl: string } | { ok: false; message: string }> {
+  const article = await prisma.article.findFirst({ where: { id: articleId, userId } });
+  if (!article) return { ok: false, message: "Artigo não encontrado." };
+  if (article.status !== "FALHA") return { ok: false, message: "Só é possível reenviar artigos com falha." };
+
+  try {
+    let contentHtml = article.contentHtml;
+    let excerpt = article.excerpt;
+    let slug = article.slug;
+    let titulo = article.titulo;
+
+    if (!contentHtml) {
+      if (!article.iaTexto) throw new Error("Não é possível reenviar: provedor de texto original não registrado.");
+      const textKey = await getDecryptedApiKey(userId, article.iaTexto, "TEXTO");
+      if (!textKey) throw new AiProviderError("invalid_key", article.iaTexto.toLowerCase(), "chave não configurada");
+      const textProvider = createTextProvider(article.iaTexto, textKey);
+      const gerado = await textProvider.generateArticle({
+        tipo: article.tipo,
+        tema: article.tema ?? titulo,
+        titulo,
+        promptCustomizado: article.promptCustomizado ?? undefined,
+      });
+      contentHtml = gerado.contentHtml;
+      excerpt = gerado.excerpt;
+      slug = gerado.slug;
+      if (gerado.metaTitle && gerado.metaTitle.length > 0 && gerado.metaTitle.length <= 60) titulo = gerado.metaTitle;
+      await prisma.article.update({ where: { id: article.id }, data: { titulo, contentHtml, excerpt, slug } });
+    }
+
+    let wpMediaId = article.wpMediaId;
+    if (!wpMediaId) {
+      if (!article.iaImagem) throw new Error("Não é possível reenviar: provedor de imagem original não registrado.");
+      const imageKey = await getDecryptedApiKey(userId, article.iaImagem, "IMAGEM");
+      if (!imageKey) throw new AiProviderError("invalid_key", article.iaImagem.toLowerCase(), "chave não configurada");
+      const imageProvider = createImageProvider(article.iaImagem, imageKey);
+      const imagem = await imageProvider.generateImage({ prompt: buildImagePrompt(titulo, article.tema ?? titulo) });
+      const creds = await getSiteCredentials(userId, article.wpSiteId);
+      const ext = imagem.mimeType === "image/jpeg" ? "jpg" : "png";
+      const media = await uploadMedia(creds, { filename: `${slug || "imagem"}.${ext}`, mimeType: imagem.mimeType, data: Buffer.from(imagem.base64, "base64") });
+      wpMediaId = media.id;
+      await prisma.article.update({ where: { id: article.id }, data: { imageUrl: media.sourceUrl, wpMediaId } });
+    }
+
+    const creds = await getSiteCredentials(userId, article.wpSiteId);
+    const post = await createPost(creds, {
+      title: titulo,
+      contentHtml,
+      status: article.wpStatusAlvo === "DRAFT" ? "draft" : "publish",
+      excerpt: excerpt ?? undefined,
+      slug: slug ?? undefined,
+      categoryId: article.categoriaWpId ?? undefined,
+      featuredMediaId: wpMediaId,
+    });
+
+    await prisma.article.update({
+      where: { id: article.id },
+      data: {
+        wpPostId: post.id,
+        wpUrl: post.link,
+        status: article.wpStatusAlvo === "DRAFT" ? "RASCUNHO" : "PUBLICADO",
+        publishedAt: new Date(),
+        erroMsg: null,
+      },
+    });
+
+    return { ok: true, wpUrl: post.link };
+  } catch (err) {
+    const message = toUserMessage(err);
+    await prisma.article.update({ where: { id: article.id }, data: { status: "FALHA", erroMsg: message } });
+    return { ok: false, message };
+  }
 }

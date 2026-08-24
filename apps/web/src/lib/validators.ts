@@ -49,36 +49,72 @@ export const updateWpSiteSchema = z.object({
   appPassword: z.string().min(1).optional(),
 });
 
+export const articleTypeEnum = z.enum([
+  "RECEITA",
+  "TUTORIAL",
+  "PASSO_A_PASSO",
+  "NOTICIAS",
+  "NOVIDADES",
+  "CURIOSIDADES",
+  "OPINIAO",
+  "REVIEWS",
+  "GUIA_COMPLETO",
+  "COMPARATIVO",
+  "LISTICLE",
+  "FAQ",
+  "ANALISE",
+  "ESTUDO_DE_CASO",
+]);
+
+export const aiProviderEnum = z.enum(["OPENAI", "GEMINI", "GROK", "STABILITY"]);
+
 export const generateTitlesSchema = z.object({
-  tipo: z.enum([
-    "RECEITA",
-    "TUTORIAL",
-    "PASSO_A_PASSO",
-    "NOTICIAS",
-    "NOVIDADES",
-    "CURIOSIDADES",
-    "OPINIAO",
-    "REVIEWS",
-    "GUIA_COMPLETO",
-    "COMPARATIVO",
-    "LISTICLE",
-    "FAQ",
-    "ANALISE",
-    "ESTUDO_DE_CASO",
-  ]),
+  tipo: articleTypeEnum,
   tema: z.string().min(1, "Informe o tema."),
-  iaTexto: z.enum(["OPENAI", "GEMINI", "GROK", "STABILITY"]),
+  iaTexto: aiProviderEnum,
   titulosExistentes: z.array(z.string()).optional(),
 });
 
 export const generateArticleSchema = z.object({
   wpSiteId: z.string().min(1, "Selecione um site."),
   categoriaWpId: z.number().int().optional(),
-  iaTexto: z.enum(["OPENAI", "GEMINI", "GROK", "STABILITY"]),
-  iaImagem: z.enum(["OPENAI", "GEMINI", "GROK", "STABILITY"]),
-  tipo: generateTitlesSchema.shape.tipo,
+  iaTexto: aiProviderEnum,
+  iaImagem: aiProviderEnum,
+  tipo: articleTypeEnum,
   tema: z.string().min(1, "Informe o tema."),
   titulo: z.string().min(1, "Informe ou gere um título.").optional(),
   promptCustomizado: z.string().optional(),
   statusWp: z.enum(["PUBLISH", "DRAFT"]),
+});
+
+const INTERVALOS_MIN = [10, 15, 20, 30, 45, 60, 120, 180, 360, 720, 1440] as const;
+
+export const createProductionLineSchema = z.object({
+  nome: z.string().min(1, "Informe o nome da linha."),
+  wpSiteId: z.string().min(1, "Selecione um site."),
+  categoriaWpId: z.number().int().optional(),
+  categoriaWpNome: z.string().optional(),
+  iaTexto: aiProviderEnum,
+  iaImagem: aiProviderEnum,
+  tipoArtigo: articleTypeEnum,
+  temas: z
+    .array(z.string().min(1))
+    .min(1, "Informe ao menos um tema."),
+  intervaloMin: z.number().int().refine((v) => (INTERVALOS_MIN as readonly number[]).includes(v), "Intervalo inválido."),
+  maxArtigos: z.number().int().positive().optional(),
+  statusWp: z.enum(["PUBLISH", "DRAFT"]),
+  promptCustomizado: z.string().optional(),
+  rateLimitBehavior: z.enum(["ADIAR", "PAUSAR"]).optional(),
+});
+
+export const generateLineTitlesSchema = z.object({
+  quantidade: z.number().int().min(1).max(10).optional(),
+});
+
+export const updateTitleQueueItemSchema = z.object({
+  titulo: z.string().min(1, "Informe o título."),
+});
+
+export const resendArticleSchema = z.object({
+  articleId: z.string().min(1),
 });

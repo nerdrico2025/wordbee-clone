@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { FileText, Globe, TrendingUp, PenSquare, KeyRound, History, ExternalLink } from "lucide-react";
+import { FileText, Globe, TrendingUp, PenSquare, KeyRound, History, ExternalLink, AlertTriangle } from "lucide-react";
 import { prisma } from "@wordbee/db";
 import { getCurrentSession } from "@/lib/auth";
 import { PageHeader } from "@/components/layout/PageHeader";
@@ -24,7 +24,7 @@ export default async function DashboardPage() {
   const inicioMes = startOfMonth();
   const em24h = new Date(Date.now() + 24 * 60 * 60 * 1000);
 
-  const [totalPublicados, publicadosMes, sitesCount, agendados24h, linhasAtivas, apiKeysCount, ultimosArtigos] = await Promise.all([
+  const [totalPublicados, publicadosMes, sitesCount, agendados24h, linhasAtivas, apiKeysCount, ultimosArtigos, linhasComAlerta] = await Promise.all([
     prisma.article.count({ where: { userId, status: "PUBLICADO" } }),
     prisma.article.count({ where: { userId, status: "PUBLICADO", publishedAt: { gte: inicioMes } } }),
     prisma.wpSite.count({ where: { userId } }),
@@ -37,11 +37,36 @@ export default async function DashboardPage() {
       take: 5,
       include: { wpSite: { select: { nome: true } } },
     }),
+    prisma.productionLine.findMany({
+      where: { userId, status: "PAUSADA", consecutiveFailures: { gte: 5 } },
+      select: { id: true, nome: true, pauseReason: true },
+    }),
   ]);
 
   return (
     <div>
       <PageHeader title="Dashboard" subtitle="Visão geral da sua produção de conteúdo." />
+
+      {linhasComAlerta.length > 0 && (
+        <div className="mb-6 flex items-start gap-3 rounded-card border border-red-200 bg-red-50 p-4 dark:border-red-900/50 dark:bg-red-500/10">
+          <AlertTriangle className="h-5 w-5 shrink-0 text-red-600" />
+          <div className="text-sm text-red-700 dark:text-red-300">
+            <p className="font-semibold">
+              {linhasComAlerta.length === 1 ? "1 linha foi pausada" : `${linhasComAlerta.length} linhas foram pausadas`} após falhas consecutivas
+            </p>
+            <ul className="mt-1 list-inside list-disc">
+              {linhasComAlerta.map((l) => (
+                <li key={l.id}>
+                  <Link href={`/linhas-de-producao/${l.id}`} className="underline hover:no-underline">
+                    {l.nome}
+                  </Link>
+                  {l.pauseReason ? ` — ${l.pauseReason}` : ""}
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      )}
 
       <div className="rounded-card bg-brand-gradient p-6 text-white shadow-card">
         <p className="text-sm font-medium text-white/80">Resumo do mês</p>
