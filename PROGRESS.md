@@ -89,9 +89,40 @@ Estado da build do clone pessoal do Wordbee. Atualizado ao final de cada prompt.
 - Essa validação revelou e corrigiu dois problemas reais: o modelo `gemini-2.5-flash` citado no PRD não existe mais (trocado para `gemini-3.6-flash`) e faltava um código de erro para 502/503/504 (`unavailable`, antes caía em `unknown`). Ver DECISIONS.md.
 - Pendente: a publicação de fato (`uploadMedia`/`createPost`) só será validada com uma chave de imagem com cota disponível (ex.: aguardar reset da cota gratuita da Gemini, ou outra chave de imagem).
 
-## ⏳ Ainda não implementado (próximos prompts)
+## ✅ PROMPT 3 — Linhas de Produção, worker, fila de títulos e histórico (concluído)
 
-- **PROMPT 3**: Linhas de Produção (CRUD, modal, página de detalhe), fila BullMQ real (repeatable jobs, lock por linha, concorrência por provedor), Fila de Títulos, Histórico com filtros/paginação/reenvio, upload de imagens de referência (storage local).
+### Storage local (`packages/shared/src/storage/`)
+- Abstração `StorageDriver` (save/read/delete/publicUrl); implementação em disco (`local.ts`) usada para as imagens de referência das linhas. `STORAGE_LOCAL_PATH` precisa ser absoluto (web e worker rodam em `cwd` diferentes). Servido via `/api/uploads/[...path]` (autenticado).
+
+### Agendador (`packages/shared/src/queue/`)
+- Fila BullMQ compartilhada entre web e worker (`scheduleLineRun`/`cancelLineRun`, `jobId=lineId`). Web agenda/cancela ao criar, pausar, retomar ou excluir uma linha; worker reagenda a próxima execução ao final de cada tick.
+
+### Worker — motor de automação (`apps/worker/src/`)
+- `line-pipeline.ts`: executa um "tick" completo de uma linha — consome/gera título (evitando duplicados), gera conteúdo, gera imagem (com imagens de referência quando o provedor é Gemini), publica no WordPress, atualiza contadores e repõe a fila de títulos. Nunca lança para o BullMQ — todo erro é tratado e registrado.
+- `lock.ts`: lock por linha via Redis `SET NX PX` — nunca duas execuções simultâneas da mesma linha.
+- `provider-concurrency.ts`: semáforo Redis por provedor de IA (`AI_PROVIDER_CONCURRENCY`, padrão 3).
+- Idempotência via `idempotencyKey` determinística; retry parcial (3 tentativas com backoff) que só regera a etapa que realmente falhou, reaproveitando conteúdo/imagem já persistidos.
+- Máximo de artigos → linha `CONCLUIDA` automaticamente. 5 falhas consecutivas → linha `PAUSADA` com motivo. Rate limit/sobrecarga do provedor → adia o próximo disparo ou pausa a linha, conforme configurado por linha.
+- `syncActiveLines()` no boot do worker resincroniza qualquer linha `ATIVA` sem job agendado (resiliência a reinício/Redis limpo).
+- 13 testes automatizados cobrindo exatamente os 5 cenários pedidos no PRD: máximo atingido, rate limit (ADIAR e PAUSAR), falha com retry até sucesso, falha esgotando as 3 tentativas, pausa após 5 falhas consecutivas, idempotência/duplicidade, e lock (adquirir/liberar).
+
+### Linhas de Produção (RF-24 a RF-30)
+- Listagem em cards (badge de status, site, tipo, intervalo, progresso `N/max`, temas, último/próximo, Pausar/Retomar/Excluir).
+- Modal "Nova Linha de Produção" com todos os campos do PRD em duas colunas, incluindo upload de até 5 imagens de referência (staged no cliente, enviadas após a linha ser criada).
+- Página de detalhe: galeria de imagens de referência (editável), Fila de Títulos (gerar, editar inline, contador, "previsto para"), Artigos Publicados, botão "Atualizar".
+
+### Histórico (RF-31 a RF-33)
+- Lista paginada (20/página) com filtros por site, status, linha/manual e período, busca por título — tudo via query string da URL (Server Component). Ação "Reenviar" nos artigos com falha, reaproveitando conteúdo/imagem já gerados.
+
+### Dashboard
+- Alerta visual quando alguma linha foi pausada por 5+ falhas consecutivas, com link direto para a linha.
+
+### Qualidade
+- `npm run typecheck`, `npm run build` (web + worker + libs) e testes (65/65) limpos. Lint sem erros/avisos.
+- **Validação real ponta a ponta do worker** (não só mocks): linha de produção criada de verdade contra o site `rendadinheiro.com.br` e a chave Gemini já configurados. Título e conteúdo gerados de verdade; rate limit de imagem tratado e reagendado corretamente. Revelou e corrigiu 2 bugs reais (ver DECISIONS.md): `nextRunAt` inconsistente entre banco e fila após falha, e log de rate-limit faltando fora da etapa de título. Publicação de fato segue bloqueada pela mesma cota de imagem gratuita esgotada da conta de teste.
+
+## ⏳ Ainda não implementado (próximo prompt)
+
 - **PROMPT 4**: Auditoria de fidelidade visual completa, robustez (skeletons/erros em todas as telas), varredura de segurança (SSRF completo com resolução de DNS, validação de upload), Dockerfiles de produção, README completo, checklist de aceite da seção 9 do PRD.
 
 ## Como rodar localmente
@@ -114,7 +145,7 @@ npm run db:seed
 
 # 5. Suba o app web
 npm run dev
-# em outro terminal, o worker (ainda placeholder até o PROMPT 3):
+# em outro terminal, o worker (processa as Linhas de Produção ativas):
 npm run dev:worker
 ```
 
@@ -124,3 +155,4 @@ App em `http://localhost:3000/login`, com as credenciais definidas em `ADMIN_EMA
 
 - Ambiente de build usa Node.js 24; um bug conhecido do Next 14 (`<Html> should not be imported outside of pages/_document` ao gerar `/404`/`/500`) foi contornado — a causa raiz era `NODE_ENV` vazando do `.env` para dentro de `next build`. **Nunca defina `NODE_ENV` no `.env`.**
 - `npm audit` reporta CVEs conhecidos do Next 14.x sem correção disponível na série 14 (só em major 15/16); ver DECISIONS.md para a análise de risco aceito.
+- **Como acompanhar os logs do worker**: rode `npm run dev:worker` (dev) ou `node apps/worker/dist/index.js` (produção) num terminal — cada execução de linha imprime uma linha `[worker] linha=<id> evento=<...>` (título gerado, publicado, falha, rate limit, etc.) em tempo real no stdout desse processo.
