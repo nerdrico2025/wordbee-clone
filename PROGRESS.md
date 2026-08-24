@@ -44,11 +44,50 @@ Estado da build do clone pessoal do Wordbee. Atualizado ao final de cada prompt.
 - Lint (`eslint` no web e no worker) sem erros/avisos.
 - Smoke test manual ponta a ponta feito com `next start` real: login, dashboard autenticado, `/api/profile`, `/api/profile/sessions`, bloqueio de rota sem sessão (307/401), logout, e verificação de que o worker conecta em Redis e Postgres.
 
+## ✅ PROMPT 2 — Chaves de API, Sites WordPress e geração unitária (concluído)
+
+### Clientes de IA (`packages/shared/src/ai/`)
+- Interface única `TextProvider` (`generateTitles`, `generateArticle`) e `ImageProvider` (`generateImage`), implementadas para OpenAI, Gemini, Grok (xAI) e Stability AI (só imagem).
+- Erros normalizados em português (`AiProviderError`: `invalid_key`, `rate_limit`, `timeout`, `content_blocked`, `unknown`), com classificação de status HTTP incluindo o caso especial da Gemini (400 para chave inválida).
+- Modelos configuráveis por env (`AI_MODELS`), registry com metadados para a UI (nome, modelo, badge gratuito, placeholder de prefixo, link de documentação).
+- `fetchWithTimeout`/`fetchJsonOrThrow` usam `undici` explicitamente (não o `fetch` global) — ver DECISIONS.md sobre o bug do Next.js que isso corrige.
+
+### Prompts por tipo de artigo (`packages/shared/src/prompts/`)
+- Os 14 tipos do PRD em arquivos separados (`article-types/*.ts`), cada um com sua estrutura; regras de saída comuns (HTML Gutenberg-friendly, SEO básico, sem markdown) centralizadas em `common.ts`.
+
+### Cliente WordPress (`packages/shared/src/wordpress/`, com testes)
+- `testConnection` (via `/users/me?context=edit`, valida `roles.includes("administrator")`), `listCategories`, `uploadMedia`, `createPost`.
+- Retry com backoff (3 tentativas) só para falhas de rede/timeout; erros determinísticos (401/403/404) não tentam de novo.
+- Guarda anti-SSRF básica (bloqueia localhost/IPs privados) antes de qualquer request.
+- 19 testes cobrindo sucesso, cada código de erro, retry/backoff e a guarda SSRF.
+
+### Chaves de API (RF-09 a RF-15)
+- Página com abas "IAs para Artigos"/"IAs para Imagens", cards por provedor com badge de modelo, nota de gratuidade, estado configurado/não configurado (chave mascarada), input com olho, link "Como obter a chave".
+- Compartilhamento real: OpenAI/Gemini salvam sob `tipo=AMBOS` (uma chave para as duas abas); Grok/Stability por capacidade.
+- Chave só é persistida se a validação no provedor for bem-sucedida.
+
+### Sites WordPress (RF-16 a RF-20)
+- CRUD completo (criar/editar/excluir com aviso se houver linhas de produção usando o site), ação "Testar" (grava último resultado), categorias carregadas dinamicamente do site.
+- Busca por nome quando há mais de 6 sites. Sem limite de quantidade.
+
+### Criar Artigo (RF-21 a RF-23)
+- Formulário completo: site, categoria dinâmica, IA de texto/imagem (só provedores com chave válida), tipo, tema, título (com sugestões via IA, editável), prompt customizado, status no WordPress.
+- Pipeline (`apps/web/src/lib/article-pipeline.ts`) com progresso em tempo real via streaming NDJSON: título → conteúdo → imagem → publicando. Sem quota/limite em lugar nenhum.
+- Cada execução grava um `Article` no banco (mesmo em caso de falha), aparecendo depois no Histórico.
+
+### Dashboard real
+- Card de resumo do mês, 3 métricas e "Últimos artigos" consultando o Postgres diretamente (Server Component). "Configurar IAs" vira "IAs configuradas" quando há pelo menos uma chave salva.
+
+### Qualidade
+- `npm run typecheck`, `npm run build` (web + worker + libs) e testes (51/51) limpos. Lint sem erros.
+- Smoke test manual real (não só mocks): login, listagem de chaves, criação/teste/exclusão de site WordPress (contra domínio inexistente, validando as mensagens de erro), validação de chave falsa contra OpenAI e Gemini de verdade (confirmando `invalid_key` correto), dashboard com dados reais.
+
+🛑 **Parada deste prompt**: para validar uma publicação de verdade ponta a ponta, preciso de (1) uma chave de API de IA real (Gemini é a mais rápida de obter — grátis) e (2) URL, usuário admin e senha de aplicação de um site WordPress real de teste. Sem isso, o pipeline está implementado e testado com mocks/erros reais de provedor, mas nunca publicou um post de verdade. Até a resposta, sigo para os próximos prompts normalmente.
+
 ## ⏳ Ainda não implementado (próximos prompts)
 
-- **PROMPT 2**: Chaves de API (cards reais por provedor + validação real), clientes de IA (OpenAI/Gemini/Grok/Stability), cliente WordPress (REST API), Sites WordPress (CRUD real), gerador unitário "Criar Artigo", Dashboard com dados reais.
-- **PROMPT 3**: Linhas de Produção (CRUD, modal, página de detalhe), fila BullMQ real (repeatable jobs, lock por linha, concorrência por provedor), Fila de Títulos, Histórico com filtros/paginação/reenvio.
-- **PROMPT 4**: Auditoria de fidelidade visual completa, robustez (skeletons/erros em todas as telas), varredura de segurança (SSRF em URL de site WP, validação de upload), Dockerfiles de produção, README completo, checklist de aceite da seção 9 do PRD.
+- **PROMPT 3**: Linhas de Produção (CRUD, modal, página de detalhe), fila BullMQ real (repeatable jobs, lock por linha, concorrência por provedor), Fila de Títulos, Histórico com filtros/paginação/reenvio, upload de imagens de referência (storage local).
+- **PROMPT 4**: Auditoria de fidelidade visual completa, robustez (skeletons/erros em todas as telas), varredura de segurança (SSRF completo com resolução de DNS, validação de upload), Dockerfiles de produção, README completo, checklist de aceite da seção 9 do PRD.
 
 ## Como rodar localmente
 
