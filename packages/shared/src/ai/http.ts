@@ -66,6 +66,8 @@ export function parseJsonArrayResponse(text: string, provider: string): string[]
     }
     throw new Error("not an array");
   } catch {
+    // eslint-disable-next-line no-console
+    console.error(`[ai:${provider}] parseJsonArrayResponse falhou. Texto bruto:`, text);
     throw new AiProviderError("unknown", provider, "resposta do modelo não é um JSON array válido");
   }
 }

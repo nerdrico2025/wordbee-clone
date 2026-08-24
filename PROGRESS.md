@@ -82,7 +82,12 @@ Estado da build do clone pessoal do Wordbee. Atualizado ao final de cada prompt.
 - `npm run typecheck`, `npm run build` (web + worker + libs) e testes (51/51) limpos. Lint sem erros.
 - Smoke test manual real (não só mocks): login, listagem de chaves, criação/teste/exclusão de site WordPress (contra domínio inexistente, validando as mensagens de erro), validação de chave falsa contra OpenAI e Gemini de verdade (confirmando `invalid_key` correto), dashboard com dados reais.
 
-🛑 **Parada deste prompt**: para validar uma publicação de verdade ponta a ponta, preciso de (1) uma chave de API de IA real (Gemini é a mais rápida de obter — grátis) e (2) URL, usuário admin e senha de aplicação de um site WordPress real de teste. Sem isso, o pipeline está implementado e testado com mocks/erros reais de provedor, mas nunca publicou um post de verdade. Até a resposta, sigo para os próximos prompts normalmente.
+### ✅ Validação real ponta a ponta (feita em 2026-08-24)
+- Usuário forneceu uma chave Gemini real e as credenciais reais do site `rendadinheiro.com.br`.
+- Chave validada e salva (compartilhada texto/imagem), conexão testada com sucesso (`administrator`), categorias reais carregadas (Ações, Criptomoedas, Forex, Ganhar Dinheiro, IA, Negócios Online, Notícias).
+- Pipeline completo rodado contra APIs reais: título e conteúdo gerados de verdade pela Gemini; a etapa de imagem esbarrou na cota gratuita de geração de imagem da conta (HTTP 429) — o `Article` ficou `FALHA` com a mensagem certa, visível no Dashboard, exatamente como projetado.
+- Essa validação revelou e corrigiu dois problemas reais: o modelo `gemini-2.5-flash` citado no PRD não existe mais (trocado para `gemini-3.6-flash`) e faltava um código de erro para 502/503/504 (`unavailable`, antes caía em `unknown`). Ver DECISIONS.md.
+- Pendente: a publicação de fato (`uploadMedia`/`createPost`) só será validada com uma chave de imagem com cota disponível (ex.: aguardar reset da cota gratuita da Gemini, ou outra chave de imagem).
 
 ## ⏳ Ainda não implementado (próximos prompts)
 

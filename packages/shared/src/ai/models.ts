@@ -9,7 +9,7 @@ export const AI_MODELS = {
     image: process.env.OPENAI_IMAGE_MODEL || "dall-e-3",
   },
   gemini: {
-    text: process.env.GEMINI_TEXT_MODEL || "gemini-2.5-flash",
+    text: process.env.GEMINI_TEXT_MODEL || "gemini-3.6-flash",
     image: process.env.GEMINI_IMAGE_MODEL || "gemini-2.5-flash-image",
   },
   grok: {

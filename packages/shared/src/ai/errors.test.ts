@@ -11,6 +11,12 @@ describe("classifyHttpError", () => {
     expect(classifyHttpError(429, "grok").code).toBe("rate_limit");
   });
 
+  it("502/503/504 viram unavailable (sobrecarga temporária do provedor)", () => {
+    expect(classifyHttpError(502, "gemini").code).toBe("unavailable");
+    expect(classifyHttpError(503, "gemini").code).toBe("unavailable");
+    expect(classifyHttpError(504, "gemini").code).toBe("unavailable");
+  });
+
   it("400 com corpo mencionando política de conteúdo vira content_blocked", () => {
     expect(classifyHttpError(400, "openai", "content_filter triggered").code).toBe("content_blocked");
   });

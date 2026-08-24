@@ -1,4 +1,4 @@
-export type AiErrorCode = "invalid_key" | "rate_limit" | "timeout" | "content_blocked" | "unknown";
+export type AiErrorCode = "invalid_key" | "rate_limit" | "timeout" | "content_blocked" | "unavailable" | "unknown";
 
 const PROVIDER_LABELS: Record<string, string> = {
   openai: "OpenAI",
@@ -34,6 +34,8 @@ function buildUserMessage(code: AiErrorCode, provider: string): string {
       return `O ${label} demorou demais para responder. Tente novamente em instantes.`;
     case "content_blocked":
       return `O conteúdo foi bloqueado pelas políticas do ${label}. Ajuste o tema ou o prompt customizado.`;
+    case "unavailable":
+      return `O ${label} está temporariamente sobrecarregado. Tente novamente em instantes ou use outro provedor.`;
     default:
       return `Erro inesperado ao se comunicar com o ${label}. Tente novamente.`;
   }
@@ -46,6 +48,9 @@ export function classifyHttpError(status: number, provider: string, bodyText?: s
   }
   if (status === 429) {
     return new AiProviderError("rate_limit", provider, bodyText?.slice(0, 200));
+  }
+  if (status === 502 || status === 503 || status === 504) {
+    return new AiProviderError("unavailable", provider, bodyText?.slice(0, 200));
   }
   // A Gemini (e outras APIs) retorna 400/INVALID_ARGUMENT para chave inválida
   // em vez de 401 — trata como invalid_key também nesse caso.
