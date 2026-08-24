@@ -238,13 +238,20 @@ model Article {
   titleQueueId String?       @unique @map("title_queue_id")
   wpSiteId     String        @map("wp_site_id")
   titulo       String
+  tema         String?
   tipo         ArticleType
   origem       ArticleOrigin
+  promptCustomizado String? @map("prompt_customizado")
+  iaTexto      AiProvider?   @map("ia_texto")
+  iaImagem     AiProvider?   @map("ia_imagem")
+  categoriaWpId Int?         @map("categoria_wp_id")
+  wpStatusAlvo WpPostStatus  @default(PUBLISH) @map("wp_status_alvo")
   status       ArticleStatus @default(PROCESSANDO)
   contentHtml  String?       @map("content_html")
   excerpt      String?
   slug         String?
   imageUrl     String?       @map("image_url")
+  wpMediaId    Int?          @map("wp_media_id")
   wpPostId     Int?          @map("wp_post_id")
   wpUrl        String?       @map("wp_url")
   erroMsg      String?       @map("erro_msg")
