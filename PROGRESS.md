@@ -121,9 +121,29 @@ Estado da build do clone pessoal do Wordbee. Atualizado ao final de cada prompt.
 - `npm run typecheck`, `npm run build` (web + worker + libs) e testes (65/65) limpos. Lint sem erros/avisos.
 - **Validação real ponta a ponta do worker** (não só mocks): linha de produção criada de verdade contra o site `rendadinheiro.com.br` e a chave Gemini já configurados. Título e conteúdo gerados de verdade; rate limit de imagem tratado e reagendado corretamente. Revelou e corrigiu 2 bugs reais (ver DECISIONS.md): `nextRunAt` inconsistente entre banco e fila após falha, e log de rate-limit faltando fora da etapa de título. Publicação de fato segue bloqueada pela mesma cota de imagem gratuita esgotada da conta de teste.
 
-## ⏳ Ainda não implementado (próximo prompt)
+## ✅ PROMPT 4 — Fidelidade visual, robustez e deploy (concluído)
 
-- **PROMPT 4**: Auditoria de fidelidade visual completa, robustez (skeletons/erros em todas as telas), varredura de segurança (SSRF completo com resolução de DNS, validação de upload), Dockerfiles de produção, README completo, checklist de aceite da seção 9 do PRD.
+### Segurança
+- SSRF completo: guarda anti-SSRF agora resolve DNS e bloqueia domínios que apontam para redes privadas (`assertSafeWordPressUrl`), não só IPs literais. 5 novos testes.
+- Varredura completa: 23 das 24 rotas de API confirmadas exigindo sessão válida (a exceção, `/api/auth/logout`, é intencional e inofensiva); nenhuma chave/senha em texto puro em log ou resposta (verificado por grep); uploads de imagem de referência já validavam tipo (PNG/JPEG/WEBP) e tamanho (5MB) desde o PROMPT 3.
+
+### Operação
+- **Indicador de saúde do worker**: heartbeat no Redis (`worker:heartbeat`, TTL 90s) + `worker:last_success`, exibido no Dashboard como badge "Worker online/offline".
+- **Logs estruturados do worker**: cada evento (título, conteúdo, imagem, publicado, falha, rate limit) sai como JSON com linha/evento/detalhe; um log de resumo por "tick" com a duração total.
+- **Scripts de backup/restore** (`scripts/backup.sh`/`restore.sh`, via `pg_dump`/`pg_restore`) — testados contra o banco de dev.
+
+### Robustez
+- `loading.tsx` e `error.tsx` no grupo `(dashboard)` — skeleton e tela de erro amigável cobrindo todas as páginas do painel.
+- Toasts de sucesso/erro adicionados aos fluxos que só tinham feedback inline (Chaves de API, Sites WordPress, Nova Linha, Criar Artigo).
+
+### Deploy e documentação
+- `Dockerfile` do web (build standalone do Next) e do worker (multi-stage, node_modules completo), `docker-compose.prod.yml` (Postgres + Redis + web + worker).
+- **Testado de verdade, não só escrito**: subi um Docker daemon local (colima), buildei as duas imagens, rodei a stack completa, apliquei as 5 migrações e o seed exatamente como documentado no README, e confirmei login funcionando pelo container — depois desfiz tudo (`down -v`, imagens removidas, `.env` restaurado, colima parado).
+- `README.md` completo: pré-requisitos, cada variável de ambiente explicada, passo a passo de instalação local e de deploy no VPS, como obter cada chave de IA, como gerar a senha de aplicação do WordPress, como usar cada tela, como acompanhar os logs do worker.
+- Checklist de aceite da seção 9 do PRD em DECISIONS.md — 9/9 itens implementados; 2 têm validação real parcial (publicação de fato bloqueada pela cota de imagem gratuita já esgotada da conta de teste, não por limitação do código).
+
+### Qualidade
+- `npm run typecheck`, `npm run build` (web + worker + libs) e testes (70/70) limpos. Lint sem erros/avisos. Build Docker das duas imagens validado de ponta a ponta.
 
 ## Como rodar localmente
 
