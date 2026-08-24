@@ -1,0 +1,265 @@
+// Wordbee Clone — schema de banco de dados (uso pessoal, usuário único)
+// user_id é mantido nas tabelas por higiene de schema, mas o sistema opera
+// com um único registro em `users` (ver PRD seção 5).
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+enum AiProvider {
+  OPENAI
+  GEMINI
+  GROK
+  STABILITY
+}
+
+enum ApiKeyKind {
+  TEXTO
+  IMAGEM
+  AMBOS
+}
+
+enum ArticleType {
+  RECEITA
+  TUTORIAL
+  PASSO_A_PASSO
+  NOTICIAS
+  NOVIDADES
+  CURIOSIDADES
+  OPINIAO
+  REVIEWS
+  GUIA_COMPLETO
+  COMPARATIVO
+  LISTICLE
+  FAQ
+  ANALISE
+  ESTUDO_DE_CASO
+}
+
+enum WpPostStatus {
+  PUBLISH
+  DRAFT
+}
+
+enum LineStatus {
+  ATIVA
+  PAUSADA
+  CONCLUIDA
+}
+
+enum TitleStatus {
+  NA_FILA
+  USADO
+  DESCARTADO
+}
+
+enum ArticleStatus {
+  PROCESSANDO
+  PUBLICADO
+  RASCUNHO
+  FALHA
+}
+
+enum ArticleOrigin {
+  MANUAL
+  LINHA
+}
+
+enum RateLimitBehavior {
+  ADIAR
+  PAUSAR
+}
+
+// ---------------------------------------------------------------------------
+// Models
+// ---------------------------------------------------------------------------
+
+model User {
+  id           String   @id @default(cuid())
+  nome         String
+  email        String   @unique
+  senhaHash    String   @map("senha_hash")
+  temaUi       String   @default("light") @map("tema_ui")
+  totpSecret   String?  @map("totp_secret")
+  totpEnabled  Boolean  @default(false) @map("totp_enabled")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  apiKeys         ApiKey[]
+  wpSites         WpSite[]
+  productionLines ProductionLine[]
+  articles        Article[]
+  sessions        Session[]
+
+  @@map("users")
+}
+
+/// Sessões ativas (para a tela de Perfil listar/encerrar sessões).
+model Session {
+  id         String    @id @default(cuid())
+  userId     String    @map("user_id")
+  tokenHash  String    @unique @map("token_hash")
+  userAgent  String?   @map("user_agent")
+  ip         String?
+  createdAt  DateTime  @default(now()) @map("created_at")
+  lastSeenAt DateTime  @default(now()) @map("last_seen_at")
+  expiresAt  DateTime  @map("expires_at")
+  revokedAt  DateTime? @map("revoked_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("sessions")
+}
+
+model ApiKey {
+  id               String     @id @default(cuid())
+  userId           String     @map("user_id")
+  provider         AiProvider
+  tipo             ApiKeyKind
+  chaveEncrypted   String     @map("chave_encrypted")
+  iv               String
+  authTag          String     @map("auth_tag")
+  maskedHint       String     @map("masked_hint")
+  statusValidacao  Boolean    @default(false) @map("status_validacao")
+  lastValidatedAt  DateTime?  @map("last_validated_at")
+  lastError        String?    @map("last_error")
+  createdAt        DateTime   @default(now()) @map("created_at")
+  updatedAt        DateTime   @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, provider, tipo])
+  @@map("api_keys")
+}
+
+model WpSite {
+  id                    String    @id @default(cuid())
+  userId                String    @map("user_id")
+  nome                  String
+  url                   String
+  usuario               String
+  appPasswordEncrypted  String    @map("app_password_encrypted")
+  iv                    String
+  authTag               String    @map("auth_tag")
+  lastTestAt            DateTime? @map("last_test_at")
+  lastTestOk            Boolean?  @map("last_test_ok")
+  lastTestError         String?   @map("last_test_error")
+  createdAt             DateTime  @default(now()) @map("created_at")
+  updatedAt             DateTime  @updatedAt @map("updated_at")
+
+  user            User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  productionLines ProductionLine[]
+  articles        Article[]
+
+  @@index([userId])
+  @@map("wp_sites")
+}
+
+model ProductionLine {
+  id                 String            @id @default(cuid())
+  userId             String            @map("user_id")
+  wpSiteId           String            @map("wp_site_id")
+  nome               String
+  categoriaWpId      Int?              @map("categoria_wp_id")
+  categoriaWpNome    String?           @map("categoria_wp_nome")
+  iaTexto            AiProvider        @map("ia_texto")
+  iaImagem           AiProvider        @map("ia_imagem")
+  tipoArtigo         ArticleType       @map("tipo_artigo")
+  temas              String[]
+  intervaloMin       Int               @map("intervalo_min")
+  maxArtigos         Int?              @map("max_artigos")
+  geradosCount       Int               @default(0) @map("gerados_count")
+  statusWp           WpPostStatus      @default(PUBLISH) @map("status_wp")
+  promptCustomizado  String?           @map("prompt_customizado")
+  status             LineStatus        @default(ATIVA)
+  pauseReason        String?           @map("pause_reason")
+  rateLimitBehavior  RateLimitBehavior @default(ADIAR) @map("rate_limit_behavior")
+  consecutiveFailures Int              @default(0) @map("consecutive_failures")
+  nextRunAt          DateTime?         @map("next_run_at")
+  lastRunAt          DateTime?         @map("last_run_at")
+  createdAt          DateTime          @default(now()) @map("created_at")
+  updatedAt          DateTime          @updatedAt @map("updated_at")
+
+  user            User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  wpSite          WpSite                @relation(fields: [wpSiteId], references: [id], onDelete: Restrict)
+  referenceImages LineReferenceImage[]
+  titleQueue      TitleQueueItem[]
+  articles        Article[]
+
+  @@index([nextRunAt, status])
+  @@index([userId])
+  @@map("production_lines")
+}
+
+/// Máximo de 5 imagens por linha (validado na aplicação).
+model LineReferenceImage {
+  id         String   @id @default(cuid())
+  lineId     String   @map("line_id")
+  storageUrl String   @map("storage_url")
+  ordem      Int
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  line ProductionLine @relation(fields: [lineId], references: [id], onDelete: Cascade)
+
+  @@index([lineId])
+  @@map("line_reference_images")
+}
+
+model TitleQueueItem {
+  id           String      @id @default(cuid())
+  lineId       String      @map("line_id")
+  titulo       String
+  previstoPara DateTime    @map("previsto_para")
+  status       TitleStatus @default(NA_FILA)
+  createdAt    DateTime    @default(now()) @map("created_at")
+  updatedAt    DateTime    @updatedAt @map("updated_at")
+
+  line    ProductionLine @relation(fields: [lineId], references: [id], onDelete: Cascade)
+  article Article?
+
+  @@index([lineId, status])
+  @@map("title_queue")
+}
+
+model Article {
+  id           String        @id @default(cuid())
+  userId       String        @map("user_id")
+  lineId       String?       @map("line_id")
+  titleQueueId String?       @unique @map("title_queue_id")
+  wpSiteId     String        @map("wp_site_id")
+  titulo       String
+  tipo         ArticleType
+  origem       ArticleOrigin
+  status       ArticleStatus @default(PROCESSANDO)
+  contentHtml  String?       @map("content_html")
+  excerpt      String?
+  slug         String?
+  imageUrl     String?       @map("image_url")
+  wpPostId     Int?          @map("wp_post_id")
+  wpUrl        String?       @map("wp_url")
+  erroMsg      String?       @map("erro_msg")
+  idempotencyKey String?     @unique @map("idempotency_key")
+  createdAt    DateTime      @default(now()) @map("created_at")
+  updatedAt    DateTime      @updatedAt @map("updated_at")
+  publishedAt  DateTime?     @map("published_at")
+
+  user       User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  line       ProductionLine? @relation(fields: [lineId], references: [id], onDelete: SetNull)
+  wpSite     WpSite          @relation(fields: [wpSiteId], references: [id], onDelete: Restrict)
+  titleQueue TitleQueueItem? @relation(fields: [titleQueueId], references: [id], onDelete: SetNull)
+
+  @@index([createdAt])
+  @@index([lineId, createdAt])
+  @@index([userId, status])
+  @@map("articles")
+}
