@@ -1,6 +1,10 @@
-import { describe, it, expect } from "vitest";
-import { assertPublicHttpsUrl } from "./url-guard.js";
+import { describe, it, expect, vi, beforeEach } from "vitest";
+import { lookup } from "node:dns/promises";
+import { assertPublicHttpsUrl, assertSafeWordPressUrl } from "./url-guard.js";
 import { WordPressError } from "./errors.js";
+
+vi.mock("node:dns/promises", () => ({ lookup: vi.fn() }));
+const lookupMock = vi.mocked(lookup);
 
 describe("assertPublicHttpsUrl (guarda anti-SSRF)", () => {
   it("aceita uma URL https pública normal", () => {
@@ -37,5 +41,40 @@ describe("assertPublicHttpsUrl (guarda anti-SSRF)", () => {
 
   it("rejeita protocolos não http/https", () => {
     expect(() => assertPublicHttpsUrl("ftp://meublog.com.br")).toThrow(WordPressError);
+  });
+});
+
+describe("assertSafeWordPressUrl (guarda anti-SSRF com resolução de DNS)", () => {
+  beforeEach(() => {
+    lookupMock.mockReset();
+  });
+
+  it("aceita um domínio que resolve para IP público", async () => {
+    lookupMock.mockResolvedValue([{ address: "203.0.113.10", family: 4 }] as never);
+    const url = await assertSafeWordPressUrl("https://meublog.com.br");
+    expect(url.hostname).toBe("meublog.com.br");
+  });
+
+  it("rejeita um domínio que resolve para IP privado (DNS rebinding)", async () => {
+    lookupMock.mockResolvedValue([{ address: "10.0.0.5", family: 4 }] as never);
+    await expect(assertSafeWordPressUrl("https://blog-malicioso.com")).rejects.toThrow(WordPressError);
+  });
+
+  it("rejeita se QUALQUER um dos endereços resolvidos for privado", async () => {
+    lookupMock.mockResolvedValue([
+      { address: "203.0.113.10", family: 4 },
+      { address: "192.168.1.1", family: 4 },
+    ] as never);
+    await expect(assertSafeWordPressUrl("https://blog-multi-ip.com")).rejects.toThrow(WordPressError);
+  });
+
+  it("rejeita se a resolução de DNS falhar", async () => {
+    lookupMock.mockRejectedValue(new Error("ENOTFOUND"));
+    await expect(assertSafeWordPressUrl("https://dominio-inexistente.test")).rejects.toThrow(WordPressError);
+  });
+
+  it("nem chega a resolver DNS se o hostname já é um IP privado literal", async () => {
+    await expect(assertSafeWordPressUrl("http://127.0.0.1")).rejects.toThrow(WordPressError);
+    expect(lookupMock).not.toHaveBeenCalled();
   });
 });

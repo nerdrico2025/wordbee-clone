@@ -1,7 +1,13 @@
 import { Worker, type Job } from "bullmq";
 import type { Redis } from "ioredis";
 import { prisma } from "@wordbee/db";
-import { PRODUCTION_LINE_QUEUE_NAME, scheduleLineRun, getProductionLineQueue, type ProductionLineJobData } from "@wordbee/shared";
+import {
+  PRODUCTION_LINE_QUEUE_NAME,
+  scheduleLineRun,
+  getProductionLineQueue,
+  recordLastSuccess,
+  type ProductionLineJobData,
+} from "@wordbee/shared";
 import { acquireLineLock, releaseLineLock } from "./lock.js";
 import { runProductionLine } from "./line-pipeline.js";
 
@@ -12,17 +18,27 @@ export function startProductionLineWorker(connection: Redis): Worker<ProductionL
     PRODUCTION_LINE_QUEUE_NAME,
     async (job: Job<ProductionLineJobData>) => {
       const { lineId } = job.data;
+      const startedAt = Date.now();
+
       const locked = await acquireLineLock(connection, lineId);
       if (!locked) {
-        console.log(`[worker] linha ${lineId} já está em execução em outro processo — pulando este tick.`);
+        console.log(JSON.stringify({ linha: lineId, evento: "lock_ocupado", mensagem: "já está em execução em outro processo" }));
         return;
       }
+
+      let lastEvent = "sem_evento";
       try {
         await runProductionLine(connection, lineId, ({ event, detail }) => {
-          console.log(`[worker] linha=${lineId} evento=${event}${detail ? ` detail=${detail}` : ""}`);
+          lastEvent = event;
+          console.log(JSON.stringify({ linha: lineId, evento: event, detalhe: detail }));
+          if (event === "publicado") {
+            recordLastSuccess(connection).catch((err) => console.error("[worker] falha ao gravar last_success:", err));
+          }
         });
       } finally {
         await releaseLineLock(connection, lineId);
+        const duracaoMs = Date.now() - startedAt;
+        console.log(JSON.stringify({ linha: lineId, evento: "tick_concluido", ultimoEvento: lastEvent, duracaoMs }));
       }
     },
     { connection, concurrency: WORKER_CONCURRENCY }

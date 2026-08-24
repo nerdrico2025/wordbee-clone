@@ -1,6 +1,6 @@
 import { fetch as undiciFetch, type RequestInit as UndiciRequestInit } from "undici";
 import { WordPressError, classifyWpHttpStatus } from "./errors.js";
-import { assertPublicHttpsUrl } from "./url-guard.js";
+import { assertSafeWordPressUrl } from "./url-guard.js";
 
 export interface WpSiteCredentials {
   url: string;
@@ -71,7 +71,7 @@ async function withRetry<T>(fn: () => Promise<T>, attempts = 3): Promise<T> {
 }
 
 async function wpFetch(creds: WpSiteCredentials, path: string, init: UndiciRequestInit = {}, timeoutMs = 15_000): Promise<Response> {
-  const base = assertPublicHttpsUrl(creds.url);
+  const base = await assertSafeWordPressUrl(creds.url);
   const restBase = `${base.origin}${base.pathname.replace(/\/$/, "")}/wp-json/wp/v2`;
   const target = `${restBase}${path}`;
 

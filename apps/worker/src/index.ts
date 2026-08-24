@@ -1,7 +1,9 @@
 import { prisma } from "@wordbee/db";
-import { closeProductionLineQueue } from "@wordbee/shared";
+import { closeProductionLineQueue, recordHeartbeat } from "@wordbee/shared";
 import { createRedisConnection } from "./redis.js";
 import { startProductionLineWorker, syncActiveLines } from "./production-line-worker.js";
+
+const HEARTBEAT_INTERVAL_MS = 30_000;
 
 async function main() {
   const redis = createRedisConnection();
@@ -12,6 +14,11 @@ async function main() {
   await prisma.$queryRaw`SELECT 1`;
   console.log("[worker] Postgres conectado.");
 
+  await recordHeartbeat(redis);
+  const heartbeatTimer = setInterval(() => {
+    recordHeartbeat(redis).catch((err) => console.error("[worker] falha ao gravar heartbeat:", err));
+  }, HEARTBEAT_INTERVAL_MS);
+
   await syncActiveLines();
 
   const bullWorker = startProductionLineWorker(redis);
@@ -19,6 +26,7 @@ async function main() {
 
   const shutdown = async () => {
     console.log("[worker] Encerrando...");
+    clearInterval(heartbeatTimer);
     await bullWorker.close();
     await closeProductionLineQueue();
     await redis.quit();

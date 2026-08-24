@@ -8,6 +8,13 @@ vi.mock("undici", async () => {
   return { ...actual, fetch: vi.fn() };
 });
 
+// Evita depender de DNS real nos testes: "meublog.com.br" sempre resolve
+// para um IP público fake, então a checagem anti-SSRF nunca bloqueia os
+// cenários de teste (isso é coberto separadamente em url-guard.test.ts).
+vi.mock("node:dns/promises", () => ({
+  lookup: vi.fn(async () => [{ address: "203.0.113.10", family: 4 }]),
+}));
+
 const CREDS = { url: "https://meublog.com.br", usuario: "admin", appPassword: "abcd efgh ijkl mnop" };
 
 function jsonResponse(body: unknown, status = 200): Response {
