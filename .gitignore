@@ -1,0 +1,28 @@
+node_modules/
+dist/
+.next/
+out/
+build/
+coverage/
+
+.env
+.env.local
+.env.*.local
+!.env.example
+
+*.log
+npm-debug.log*
+dump.rdb
+
+.DS_Store
+
+# Prisma
+packages/db/prisma/dev.db
+
+# uploads (dev storage local)
+storage/uploads/*
+!storage/uploads/.gitkeep
+
+.vercel
+.turbo
+*.tsbuildinfo

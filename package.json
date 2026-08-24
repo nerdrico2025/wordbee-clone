@@ -1,0 +1,43 @@
+{
+  "name": "wordbee-clone",
+  "private": true,
+  "version": "1.0.0",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "npm run build:libs && npm -w apps/web run dev",
+    "dev:worker": "npm run build:libs && npm -w apps/worker run dev",
+    "build:libs": "npm run db:generate && npm -w packages/shared run build && npm -w packages/db run build",
+    "build": "npm run build:libs && npm -w apps/web run build && npm -w apps/worker run build",
+    "test": "npm run db:generate && vitest run",
+    "test:watch": "vitest",
+    "lint": "npm -w apps/web run lint && npm -w apps/worker run lint",
+    "typecheck": "npm run build:libs && npm -w packages/db run typecheck && npm -w packages/shared run typecheck && npm -w apps/web run typecheck && npm -w apps/worker run typecheck",
+    "db:generate": "npm -w packages/db run db:generate",
+    "db:migrate": "npm -w packages/db run db:migrate",
+    "db:migrate:deploy": "npm -w packages/db run db:migrate:deploy",
+    "db:seed": "npm -w packages/db run db:seed",
+    "db:studio": "npm -w packages/db run db:studio"
+  },
+  "devDependencies": {
+    "typescript": "^5.6.3",
+    "vitest": "^2.1.4",
+    "@types/node": "^22.9.0",
+    "dotenv-cli": "^7.4.4"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "allowScripts": {
+    "@prisma/client@5.22.0": true,
+    "@prisma/engines@5.22.0": true,
+    "esbuild@0.21.5": true,
+    "esbuild@0.28.2": true,
+    "msgpackr-extract@3.0.4": true,
+    "prisma@5.22.0": true,
+    "unrs-resolver@1.12.2": true,
+    "fsevents@2.3.3": true
+  }
+}
