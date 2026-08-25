@@ -209,6 +209,14 @@ Estado da build do clone pessoal do Wordbee. Atualizado ao final de cada prompt.
 - Validado com uma query direta contra o Postgres de produção reproduzindo a query corrigida na linha real existente — `wpSite` presente no resultado. Ver `DECISIONS.md` para a análise completa (inclusive por que o toggle já estava parcialmente blindado por um merge incidental no frontend, mas `create` não).
 - `typecheck`, `lint`, `build` e os 92 testes automatizados continuam passando.
 
+### Fechamento (2026-08-25, depois do push)
+
+- **O "400" original nunca foi reproduzido** — testado de verdade (servidor local em modo produção + `curl` autenticado contra o código pré-correção): o status real é **405** (Method Not Allowed), não 400. Não há causa alternativa (middleware, rota intermediária) — só faltava o handler `GET`, que agora existe.
+- **Teste manual do clique confirmado** (Playwright + Chrome, sessão real): `PATCH` retorna 200 com `wpSite` presente no corpo, sem crash na tela, nome do site continua visível. Durante esse teste, o clique em "Retomar" acabou sendo processado de verdade pelo worker já implantado (ambiente de produção compartilhado, sem sandbox local) — a linha "teste" concluiu (3/3, "Máximo de artigos atingido"), gerando 2 artigos reais como **rascunho** no WordPress. Confirmado com o usuário: é exatamente o comportamento correto de RF-28, validado visualmente por ele em produção depois.
+- **Push feito**: commit `57af34f` em `main` (`ee7758a..57af34f`).
+- **Vercel**: deploy automático disparou e concluiu com sucesso pro commit `57af34f` (confirmado via GitHub Deployments API, `state: success`). Smoke test rodado direto contra `https://wordbee-clone-chi.vercel.app` (produção real): `GET reference-images` → `200 {"images":[]}`; `GET` do detalhe da linha → `wpSite` presente; `PATCH resume` numa linha já concluída → `400` limpo com a mensagem de negócio certa (sem crash, sem disparar execução real). **Os três confirmam o código novo rodando em produção.**
+- **Railway: o auto-deploy NÃO disparou para os últimos 3 commits** (`cb8340c`, `ee7758a`, `57af34f`). Confirmado via GitHub Deployments API — o último deployment registrado pelo `railway-app[bot]` é do commit `c8950d0`, às 14:44 UTC de 2026-08-25; nenhum registro depois disso. Não foi possível investigar a causa nem disparar manualmente pela CLI: a sessão `railway` autenticada nesta máquina (`jean@vendedormestre.com.br`) não tem acesso ao projeto da Railway do wordbee-clone (`railway link --project <id-real>` retornou "not found in workspace"; os projetos visíveis são de outro cliente). **Ação pendente do usuário**: checar no painel da Railway por que o GitHub trigger parou de disparar depois do commit `c8950d0` (integração desconectada? falha silenciosa?) e, se necessário, redeployar manualmente o serviço "web" (e conferir o "worker" também) até pegarem o commit `57af34f`.
+
 ## Como rodar localmente
 
 ```bash
