@@ -190,6 +190,16 @@ Estado da build do clone pessoal do Wordbee. Atualizado ao final de cada prompt.
 - **Provedor de chave compartilhada (OpenAI, Gemini, OpenRouter)**: remover pela aba de texto (ou de imagem) reflete instantaneamente nos dois cards, sem recarregar a página — mesmo mecanismo de leitura (`tiposToQuery`) que já unificava os dois cards para exibir "configurada".
 - **6 novos testes** em `apps/web/src/lib/api-keys.test.ts` (primeiro arquivo de teste do `apps/web` — tabela `api_keys` simulada em memória): remoção com sucesso, remoção idempotente de chave inexistente, isolamento por usuário, reflexo simultâneo nos dois cards ao remover por qualquer uma das abas, e que remover um provedor não afeta os demais configurados. **90/90 testes passando** no total (repo inteiro).
 
+## ✅ Correção: geração de artigo via OpenRouter travava indefinidamente (concluído em 2026-08-25)
+
+- **Bug real de produção confirmado e corrigido**: `generateArticle` via OpenRouter ficava pendurado 5+ minutos sem responder nem erro. Causa raiz: `fetchJsonOrThrow` (`packages/shared/src/ai/http.ts`) cancelava o timeout assim que os *headers* da resposta chegavam, deixando a leitura do *corpo* (`res.json()`) sem nenhuma proteção — para uma resposta pequena (título) isso nunca aparecia, mas para um artigo inteiro (corpo grande, mais a latência do proxy do OpenRouter) o corpo podia demorar minutos, e a chamada nunca resolvia nem rejeitava.
+- **Não era um bug isolado do OpenRouter** — o mesmo utilitário compartilhado é usado por `generateArticle`/`generateImage` de todos os providers (OpenAI, Gemini, Grok); todos tinham a mesma exposição latente, só ainda não observada.
+- `fetchJsonOrThrow` agora cobre `fetch()` **e** a leitura do corpo sob o mesmo `AbortController`/timer — um corpo lento aciona o abort e vira `AiErrorCode "timeout"` normalmente, em vez de travar.
+- `DEFAULT_TIMEOUT_MS` compartilhado subiu de 30s para 60s (evita que outros providers passem a estourar timeout de verdade cedo demais, agora que o timeout é realmente aplicado). OpenRouter ganhou um `ARTICLE_TIMEOUT_MS` explícito de 90s só para `generateArticle` (mesmo mecanismo de `generateTitles`, janela maior).
+- Confirmado que `maxDuration = 300` da rota `POST /api/articles/generate` já comporta os novos timeouts (60-90s) sem cortar a função antes da hora.
+- **2 novos testes de regressão** em `openrouter.test.ts` simulando fielmente o cenário do bug (headers OK, leitura do corpo trava até o `AbortSignal` disparar) — um para `generateArticle` (90s) e um confirmando que `generateTitles` usa o mesmo mecanismo com a janela padrão (60s). Rodados com fake timers, sem esperar de verdade. **92/92 testes passando** no total.
+- Ver `DECISIONS.md` para a análise completa da causa raiz.
+
 ## Como rodar localmente
 
 ```bash

@@ -26,19 +26,34 @@ const EXTRA_HEADERS = {
   "X-Title": "Wordbee Clone",
 };
 
-async function chatCompletion(apiKey: string, systemPrompt: string, userPrompt: string): Promise<string> {
-  const json = (await fetchJsonOrThrow(PROVIDER, `${BASE_URL}/chat/completions`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json", ...EXTRA_HEADERS },
-    body: JSON.stringify({
-      model: AI_MODELS.openrouter.text,
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: userPrompt },
-      ],
-      temperature: 0.8,
-    }),
-  })) as { choices?: Array<{ message?: { content?: string } }> };
+// Geração de artigo completo é naturalmente mais longa que sugestão de
+// título (muito mais tokens de saída) — usa um timeout explícito maior que
+// o padrão de `fetchJsonOrThrow` (ver DECISIONS.md sobre o bug corrigido em
+// 2026-08-25: `generateArticle` via OpenRouter travava indefinidamente
+// porque o timeout não cobria a leitura do corpo da resposta).
+// `generateTitles` continua usando o timeout padrão — mesmo mecanismo
+// (mesma `chatCompletion` → `fetchJsonOrThrow`), só com uma janela maior
+// para a chamada que sabidamente demora mais.
+const ARTICLE_TIMEOUT_MS = 90_000;
+
+async function chatCompletion(apiKey: string, systemPrompt: string, userPrompt: string, timeoutMs?: number): Promise<string> {
+  const json = (await fetchJsonOrThrow(
+    PROVIDER,
+    `${BASE_URL}/chat/completions`,
+    {
+      method: "POST",
+      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json", ...EXTRA_HEADERS },
+      body: JSON.stringify({
+        model: AI_MODELS.openrouter.text,
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt },
+        ],
+        temperature: 0.8,
+      }),
+    },
+    timeoutMs
+  )) as { choices?: Array<{ message?: { content?: string } }> };
 
   const content = json.choices?.[0]?.message?.content;
   if (!content) throw new AiProviderError("unknown", PROVIDER, "resposta vazia do modelo");
@@ -63,7 +78,7 @@ export function createOpenRouterTextProvider(apiKey: string): TextProvider {
 - "metaTitle": título otimizado para SEO, até 60 caracteres
 
 Não use markdown nem texto fora do JSON.`;
-      const content = await chatCompletion(apiKey, systemPrompt, userPrompt);
+      const content = await chatCompletion(apiKey, systemPrompt, userPrompt, ARTICLE_TIMEOUT_MS);
       const parsed = parseJsonObjectResponse<{ contentHtml: string; excerpt: string; metaTitle: string }>(content, PROVIDER);
       return {
         contentHtml: parsed.contentHtml,

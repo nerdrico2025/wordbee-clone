@@ -22,6 +22,7 @@ describe("OpenRouterProvider", () => {
 
   afterEach(() => {
     vi.restoreAllMocks();
+    vi.useRealTimers();
   });
 
   it("generateTitles: sucesso, envia Authorization/HTTP-Referer/X-Title e retorna a lista de títulos", async () => {
@@ -92,6 +93,51 @@ describe("OpenRouterProvider", () => {
     expect(article.contentHtml).toBe("<p>Conteúdo</p>");
     expect(article.metaTitle).toBe("Título SEO");
     expect(article.slug).toBe("bolo-de-cenoura-fofinho");
+  });
+
+  // Regressão do bug real de produção (2026-08-25): geração de artigo via
+  // OpenRouter ficava pendurada indefinidamente (5+ min, sem erro) quando
+  // os headers da resposta chegavam rápido mas o corpo (um artigo inteiro)
+  // demorava para terminar de chegar — o timeout só cobria o connect/
+  // headers, não a leitura do corpo (ver fix em packages/shared/src/ai/http.ts).
+  // O mock abaixo simula exatamente isso: `fetch()` resolve na hora (como
+  // se os headers já tivessem chegado), mas `.json()` só resolve/rejeita
+  // quando o AbortSignal passado pra ele dispara — igual ao comportamento
+  // real do undici ao ler o corpo de uma resposta abortada meio do caminho.
+  function mockHangingBody() {
+    fetchMock.mockImplementationOnce((_url: string, init: { signal: AbortSignal }) =>
+      Promise.resolve({
+        ok: true,
+        json: () =>
+          new Promise((_resolve, reject) => {
+            init.signal.addEventListener("abort", () => {
+              reject(Object.assign(new Error("The operation was aborted"), { name: "AbortError" }));
+            });
+          }),
+      })
+    );
+  }
+
+  it("generateArticle: corpo da resposta nunca termina de chegar — estoura o timeout (90s) em vez de ficar pendurado para sempre", async () => {
+    vi.useFakeTimers();
+    mockHangingBody();
+
+    const promise = provider.generateArticle({ tipo: "RECEITA", tema: "bolo de cenoura", titulo: "Bolo de Cenoura" });
+    const expectation = expect(promise).rejects.toMatchObject({ code: "timeout" });
+    await vi.advanceTimersByTimeAsync(90_000);
+    await expectation;
+  });
+
+  it("generateTitles usa o MESMO mecanismo de timeout que generateArticle, só que com a janela padrão (mais curta)", async () => {
+    vi.useFakeTimers();
+    mockHangingBody();
+
+    const promise = provider.generateTitles({ tipo: "RECEITA", tema: "bolo de cenoura" });
+    const expectation = expect(promise).rejects.toMatchObject({ code: "timeout" });
+    // Timeout padrão do provider (60s) — bem menor que os 90s de
+    // generateArticle, mas o mesmo AbortController/AiErrorCode "timeout".
+    await vi.advanceTimersByTimeAsync(60_000);
+    await expectation;
   });
 });
 
