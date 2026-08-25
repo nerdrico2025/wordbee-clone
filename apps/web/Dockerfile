@@ -1,3 +1,10 @@
+# OBSOLETO (2026-08-25): este Dockerfile depende de "output: standalone" no
+# next.config.mjs, removido porque o deploy real do "web" (Vercel/Railway) usa
+# Railpack/empacotamento nativo e não builda a partir daqui — ver DECISIONS.md
+# ("Deploy do web na Railway"). Mantido só como referência/histórico do
+# caminho alternativo "VPS único" (docker-compose.prod.yml); NÃO builda mais
+# sem reintroduzir "output: standalone" no next.config.mjs.
+#
 # Dockerfile do app web (Next.js). Build a partir da RAIZ do monorepo:
 #   docker build -f apps/web/Dockerfile -t wordbee-web .
 FROM node:20-slim AS base

@@ -1,10 +1,12 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   transpilePackages: ["@wordbee/db", "@wordbee/shared"],
-  // "standalone" é só para o deploy via Docker/VPS (apps/web/Dockerfile
-  // espera .next/standalone). Na Vercel (que define a env var VERCEL
-  // automaticamente) usamos o empacotamento serverless nativo dela.
-  output: process.env.VERCEL ? undefined : "standalone",
+  // Sem "output: standalone": o deploy do web é feito via Railpack (Vercel
+  // e Railway), que já usam seu próprio empacotamento — nenhum dos dois
+  // builda a partir de "apps/web/Dockerfile" nem lê ".next/standalone".
+  // "standalone" exige trocar o script "start" para
+  // "node .next/standalone/server.js" ("next start" não funciona nesse
+  // modo — ver DECISIONS.md), e não traz nenhum benefício aqui.
   experimental: {
     // @node-rs/argon2 embarca um binário nativo (.node); bullmq tem um
     // adaptador opcional para Valkey (@valkey/valkey-glide) que não
