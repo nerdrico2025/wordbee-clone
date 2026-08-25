@@ -55,6 +55,13 @@ export interface CreateProductionLineInput {
   rateLimitBehavior?: "ADIAR" | "PAUSAR";
 }
 
+// Include usado em toda mutação de ProductionLine que devolve a linha pro
+// frontend, pra sempre bater com o formato que a listagem/detalhe retornam
+// (ProductionLineSummary.wpSite é obrigatório) — ver DECISIONS.md sobre o
+// bug de "l.wpSite.nome is undefined" causado por endpoints de mutação que
+// deixavam esse include de fora.
+const WP_SITE_INCLUDE = { wpSite: { select: { nome: true } } } as const;
+
 export async function createProductionLine(userId: string, input: CreateProductionLineInput) {
   const line = await prisma.productionLine.create({
     data: {
@@ -75,6 +82,7 @@ export async function createProductionLine(userId: string, input: CreateProducti
       status: "ATIVA",
       nextRunAt: new Date(),
     },
+    include: WP_SITE_INCLUDE,
   });
 
   await scheduleLineRun(line.id, 0);
@@ -89,6 +97,7 @@ export async function pauseProductionLine(userId: string, lineId: string) {
   return prisma.productionLine.update({
     where: { id: lineId },
     data: { status: "PAUSADA", pauseReason: "Pausada manualmente pelo usuário." },
+    include: WP_SITE_INCLUDE,
   });
 }
 
@@ -103,6 +112,7 @@ export async function resumeProductionLine(userId: string, lineId: string) {
   const updated = await prisma.productionLine.update({
     where: { id: lineId },
     data: { status: "ATIVA", pauseReason: null, consecutiveFailures: 0, nextRunAt },
+    include: WP_SITE_INCLUDE,
   });
   await scheduleLineRun(lineId, 0);
   return updated;

@@ -200,6 +200,15 @@ Estado da build do clone pessoal do Wordbee. Atualizado ao final de cada prompt.
 - **2 novos testes de regressão** em `openrouter.test.ts` simulando fielmente o cenário do bug (headers OK, leitura do corpo trava até o `AbortSignal` disparar) — um para `generateArticle` (90s) e um confirmando que `generateTitles` usa o mesmo mecanismo com a janela padrão (60s). Rodados com fake timers, sem esperar de verdade. **92/92 testes passando** no total.
 - Ver `DECISIONS.md` para a análise completa da causa raiz.
 
+## ✅ Correção: crash ao ativar/pausar linha de produção (concluído em 2026-08-25)
+
+- **Bug real de produção**: clicar em ativar/pausar numa linha quebrava a tela com "Algo deu errado" (`TypeError: undefined is not an object (evaluating 'l.wpSite.nome')`), junto com um `400`/método não implementado em `GET /api/production-lines/[id]/reference-images`.
+- **Causa raiz**: `pauseProductionLine`/`resumeProductionLine` (e também `createProductionLine`, mesmo bug, achado durante a investigação) faziam a mutação no Postgres sem `include: { wpSite }`, devolvendo uma linha sem a chave que `ProductionLineSummary` declara como obrigatória. Corrigido com uma constante `WP_SITE_INCLUDE` compartilhada entre as três funções (`apps/web/src/lib/production-lines.ts`).
+- **Guard defensivo** `line.wpSite?.nome ?? "—"` adicionado em `LineCard.tsx` e `LineDetailClient.tsx`, independente da causa raiz — payload incompleto de qualquer endpoint futuro não deve mais derrubar a tela.
+- **`GET /api/production-lines/[id]/reference-images` implementado** (só existia `POST` antes) — devolve `{ images: [] }` com 200 pra linha sem imagens, 404 se a linha não existir.
+- Validado com uma query direta contra o Postgres de produção reproduzindo a query corrigida na linha real existente — `wpSite` presente no resultado. Ver `DECISIONS.md` para a análise completa (inclusive por que o toggle já estava parcialmente blindado por um merge incidental no frontend, mas `create` não).
+- `typecheck`, `lint`, `build` e os 92 testes automatizados continuam passando.
+
 ## Como rodar localmente
 
 ```bash

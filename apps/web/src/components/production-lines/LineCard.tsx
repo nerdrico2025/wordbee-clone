@@ -76,7 +76,7 @@ export function LineCard({ line, onChanged }: { line: ProductionLineSummary; onC
 
         <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-zinc-500 dark:text-zinc-400">
           <span className="flex items-center gap-1">
-            <Globe className="h-3.5 w-3.5" /> {line.wpSite.nome}
+            <Globe className="h-3.5 w-3.5" /> {line.wpSite?.nome ?? "—"}
           </span>
           <span className="flex items-center gap-1">
             <Layers className="h-3.5 w-3.5" /> {TYPE_LABELS[line.tipoArtigo] ?? line.tipoArtigo}

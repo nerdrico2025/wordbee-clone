@@ -50,7 +50,7 @@ export function LineDetailClient({ initial }: { initial: ProductionLineDetail })
           </div>
           <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-zinc-500 dark:text-zinc-400">
             <span className="flex items-center gap-1">
-              <Globe className="h-4 w-4" /> {line.wpSite.nome}
+              <Globe className="h-4 w-4" /> {line.wpSite?.nome ?? "—"}
             </span>
             <span className="flex items-center gap-1">
               <Layers className="h-4 w-4" /> {TYPE_LABELS[line.tipoArtigo] ?? line.tipoArtigo}
