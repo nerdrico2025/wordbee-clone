@@ -2,6 +2,14 @@
 
 Registro de decisões tomadas de forma autônoma diante de ambiguidades do PRD, conforme a regra 3 do prompt de contexto. Cada entrada tem uma linha de justificativa.
 
+## Remoção de chave de API pela UI (2026-08-25)
+
+- **Hard delete, não soft-delete**: `deleteApiKey` (`apps/web/src/lib/api-keys.ts`) apaga a linha da tabela `api_keys` de vez (`prisma.apiKey.deleteMany`), em vez de marcar um campo tipo `ativa: false`. Motivo: (1) nada no app precisa de histórico/auditoria de chaves removidas (diferente de `Article`, cujo histórico é requisito explícito do PRD); (2) a constraint única `@@unique([userId, provider, tipo])` já existe e o fluxo de recadastro usa `upsert` — soft-delete exigiria excluir linhas "removidas" dessa constraint e de toda leitura (`listApiKeyCards`, `getDecryptedApiKey`, `listConfiguredProviders`) para não bloquear/confundir um recadastro, complexidade sem benefício real num app pessoal de usuário único.
+- **`deleteMany` em vez de `delete`, de propósito**: `delete` lançaria `RecordNotFoundError` se a chave já não existisse; `deleteMany` apaga zero linhas silenciosamente. Isso torna a operação idempotente (RF implícito: clicar "Remover" duas vezes, ou a chave já ter sido removida em outra aba, nunca deveria virar erro 500) sem precisar de um `findFirst` prévio.
+- **Chave compartilhada (OpenAI/Gemini/OpenRouter) reflete nos dois cards automaticamente, sem código extra**: como `tipoForSave` já mapeia esses provedores para uma única linha `tipo=AMBOS`, e `listApiKeyCards` já lê essa mesma linha para os dois cards (texto e imagem) via `tiposToQuery`, apagar essa linha uma vez já é suficiente — não existe uma "remoção em cascata" para implementar, é a mesma leitura que já existia refletindo o novo estado.
+- **Rota `DELETE /api/api-keys/[provider]/[capability]`** (dynamic route params, não query string): segue o mesmo padrão já usado em `/api/wp-sites/[id]` e `/api/production-lines/[id]/titles/[titleId]`, em vez de introduzir um estilo novo de rota com query string só para esse endpoint.
+- **Sem endpoint dedicado de "remoção em lote"**: cada card dispara sua própria chamada DELETE; como a operação já é idempotente e barata, não há necessidade de um endpoint que remova várias chaves de uma vez.
+
 ## OpenRouter como provedor de imagem (2026-08-25)
 
 - **Motivo de negócio**: evitar depender só da cota diária gratuita do Gemini direto (1500 req/dia texto, **500/dia imagem**, já esgotada em testes anteriores — ver PROMPT 2/3) e consolidar o billing pago em um único provedor (OpenRouter), já integrado para texto nesta mesma entrega.

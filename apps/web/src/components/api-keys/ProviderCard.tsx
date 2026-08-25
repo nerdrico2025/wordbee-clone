@@ -1,11 +1,12 @@
 "use client";
 
 import { useState, type FormEvent } from "react";
-import { ExternalLink, KeyRound } from "lucide-react";
+import { ExternalLink, KeyRound, Trash2 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { PasswordInput } from "@/components/ui/Input";
 import { Button } from "@/components/ui/Button";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { useToast } from "@/components/ui/Toast";
 import type { ApiKeyCard, Capability } from "@/lib/api-keys";
 
@@ -23,6 +24,8 @@ export function ProviderCard({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [deleting, setDeleting] = useState(false);
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
@@ -50,6 +53,22 @@ export function ProviderCard({
     }
   }
 
+  async function handleDelete() {
+    setDeleting(true);
+    try {
+      const res = await fetch(`/api/api-keys/${card.provider}/${capability}`, { method: "DELETE" });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Não foi possível remover a chave.");
+      onSaved(data);
+      toast({ title: `Chave do ${card.nome} removida.`, variant: "success" });
+    } catch (err) {
+      toast({ title: `Não foi possível remover a chave do ${card.nome}.`, description: (err as Error).message, variant: "error" });
+    } finally {
+      setDeleting(false);
+      setConfirmOpen(false);
+    }
+  }
+
   return (
     <Card>
       <CardContent>
@@ -74,10 +93,21 @@ export function ProviderCard({
 
         <div className="mt-3">
           {card.configured ? (
-            <p className="flex items-center gap-1.5 text-sm text-zinc-600 dark:text-zinc-300">
-              <KeyRound className="h-3.5 w-3.5 text-emerald-500" />
-              Chave configurada: <span className="font-mono">{card.maskedKey}</span>
-            </p>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="flex items-center gap-1.5 text-sm text-zinc-600 dark:text-zinc-300">
+                <KeyRound className="h-3.5 w-3.5 text-emerald-500" />
+                Chave configurada: <span className="font-mono">{card.maskedKey}</span>
+              </p>
+              <Button
+                type="button"
+                variant="destructive"
+                size="sm"
+                onClick={() => setConfirmOpen(true)}
+                aria-label={`Remover chave do ${card.nome}`}
+              >
+                <Trash2 className="h-3.5 w-3.5" /> Remover
+              </Button>
+            </div>
           ) : (
             <p className="text-sm text-amber-600 dark:text-amber-400">⚠ Nenhuma chave configurada</p>
           )}
@@ -104,6 +134,16 @@ export function ProviderCard({
         )}
         {success && !error && <p className="mt-2 text-sm text-emerald-600">Chave validada e salva com sucesso.</p>}
       </CardContent>
+
+      <ConfirmDialog
+        open={confirmOpen}
+        onOpenChange={setConfirmOpen}
+        title={`Remover chave do ${card.nome}`}
+        description="Linhas de produção ou o gerador unitário que estejam usando esse provedor vão parar de funcionar até uma nova chave ser configurada."
+        confirmLabel="Remover"
+        loading={deleting}
+        onConfirm={handleDelete}
+      />
     </Card>
   );
 }

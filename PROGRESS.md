@@ -182,6 +182,14 @@ Estado da build do clone pessoal do Wordbee. Atualizado ao final de cada prompt.
 - **6 novos testes** (geração simples, com referência, créditos insuficientes, timeout, fallback de referência não suportada, 400 genérico que não aciona o fallback). **84/84 testes passando** no total.
 - Ver `DECISIONS.md` para o motivo de negócio (evitar depender só da cota gratuita do Gemini direto e consolidar billing em um único provedor).
 
+## ✅ Remoção de chave de API pela UI (concluído em 2026-08-25)
+
+- Botão **"Remover"** (`Button variant="destructive"`) em cada card de `/chaves-de-api` (`ProviderCard.tsx`), visível só quando a chave está configurada — some junto com o card voltar ao estado "⚠ Nenhuma chave configurada".
+- Confirmação via `ConfirmDialog` avisando que linhas de produção e o gerador unitário que usam o provedor param de funcionar até uma nova chave ser configurada.
+- **`DELETE /api/api-keys/[provider]/[capability]`** → `deleteApiKey` (`apps/web/src/lib/api-keys.ts`), hard delete idempotente (`deleteMany`, nunca lança erro para chave inexistente). Ver `DECISIONS.md` para a escolha entre hard e soft delete.
+- **Provedor de chave compartilhada (OpenAI, Gemini, OpenRouter)**: remover pela aba de texto (ou de imagem) reflete instantaneamente nos dois cards, sem recarregar a página — mesmo mecanismo de leitura (`tiposToQuery`) que já unificava os dois cards para exibir "configurada".
+- **6 novos testes** em `apps/web/src/lib/api-keys.test.ts` (primeiro arquivo de teste do `apps/web` — tabela `api_keys` simulada em memória): remoção com sucesso, remoção idempotente de chave inexistente, isolamento por usuário, reflexo simultâneo nos dois cards ao remover por qualquer uma das abas, e que remover um provedor não afeta os demais configurados. **90/90 testes passando** no total (repo inteiro).
+
 ## Como rodar localmente
 
 ```bash

@@ -30,6 +30,12 @@ export const saveApiKeySchema = z.object({
   apiKey: z.string().min(1, "Informe a chave de API."),
 });
 
+/** Parâmetros de rota de DELETE /api/api-keys/[provider]/[capability]. */
+export const apiKeyRouteParamsSchema = z.object({
+  provider: z.enum(["OPENAI", "GEMINI", "GROK", "STABILITY", "OPENROUTER"]),
+  capability: z.enum(["TEXTO", "IMAGEM"]),
+});
+
 const httpsUrl = z
   .string()
   .min(1, "Informe a URL do site.")

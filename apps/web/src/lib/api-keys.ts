@@ -89,6 +89,22 @@ export async function saveApiKey(userId: string, provider: AiProviderName, capab
   });
 }
 
+/**
+ * Remove a chave configurada para um provedor/capacidade (hard delete — ver
+ * DECISIONS.md sobre a escolha entre apagar de vez e soft-delete).
+ * Idempotente: se não houver chave configurada, não lança erro (`deleteMany`
+ * apaga zero linhas).
+ *
+ * Para um provedor de chave compartilhada (`tipoForSave` retorna "AMBOS"),
+ * apaga a única linha que serve texto e imagem — como `listApiKeyCards` lê
+ * essa mesma linha para os dois cards (via `tiposToQuery`), a remoção já
+ * reflete nos dois sem nenhuma lógica extra.
+ */
+export async function deleteApiKey(userId: string, provider: AiProviderName, capability: Capability): Promise<void> {
+  const tipo = tipoForSave(provider, capability);
+  await prisma.apiKey.deleteMany({ where: { userId, provider: provider as AiProvider, tipo } });
+}
+
 /** Descriptografa a chave configurada para um provedor/capacidade. Retorna null se não houver chave configurada. */
 export async function getDecryptedApiKey(userId: string, provider: AiProviderName, capability: Capability): Promise<string | null> {
   const row = await prisma.apiKey.findFirst({
