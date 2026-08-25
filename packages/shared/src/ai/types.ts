@@ -1,7 +1,7 @@
 import type { ArticleTypeSlug } from "../article-types.js";
 
 /** Casing igual ao enum AiProvider do Prisma (packages/db), para evitar camada de tradução. */
-export type AiProviderName = "OPENAI" | "GEMINI" | "GROK" | "STABILITY";
+export type AiProviderName = "OPENAI" | "GEMINI" | "GROK" | "STABILITY" | "OPENROUTER";
 
 export interface GenerateTitlesInput {
   tipo: ArticleTypeSlug;

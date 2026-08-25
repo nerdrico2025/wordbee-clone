@@ -11,6 +11,13 @@ describe("classifyHttpError", () => {
     expect(classifyHttpError(429, "grok").code).toBe("rate_limit");
   });
 
+  it("402 vira insufficient_credits (usado pelo OpenRouter para saldo esgotado)", () => {
+    const err = classifyHttpError(402, "openrouter");
+    expect(err.code).toBe("insufficient_credits");
+    expect(err.userMessage).toContain("Créditos insuficientes");
+    expect(err.userMessage).toContain("openrouter.ai");
+  });
+
   it("502/503/504 viram unavailable (sobrecarga temporária do provedor)", () => {
     expect(classifyHttpError(502, "gemini").code).toBe("unavailable");
     expect(classifyHttpError(503, "gemini").code).toBe("unavailable");

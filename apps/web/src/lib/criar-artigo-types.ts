@@ -8,7 +8,7 @@ export interface CategoryOption {
   name: string;
 }
 
-export type ProviderValue = "OPENAI" | "GEMINI" | "GROK" | "STABILITY";
+export type ProviderValue = "OPENAI" | "GEMINI" | "GROK" | "STABILITY" | "OPENROUTER";
 
 export interface ProviderOption {
   provider: ProviderValue;

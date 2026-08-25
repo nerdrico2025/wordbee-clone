@@ -20,6 +20,7 @@ enum AiProvider {
   GEMINI
   GROK
   STABILITY
+  OPENROUTER
 }
 
 enum ApiKeyKind {

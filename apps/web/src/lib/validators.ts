@@ -25,7 +25,7 @@ export const totpVerifySchema = z.object({
 });
 
 export const saveApiKeySchema = z.object({
-  provider: z.enum(["OPENAI", "GEMINI", "GROK", "STABILITY"]),
+  provider: z.enum(["OPENAI", "GEMINI", "GROK", "STABILITY", "OPENROUTER"]),
   capability: z.enum(["TEXTO", "IMAGEM"]),
   apiKey: z.string().min(1, "Informe a chave de API."),
 });
@@ -66,7 +66,7 @@ export const articleTypeEnum = z.enum([
   "ESTUDO_DE_CASO",
 ]);
 
-export const aiProviderEnum = z.enum(["OPENAI", "GEMINI", "GROK", "STABILITY"]);
+export const aiProviderEnum = z.enum(["OPENAI", "GEMINI", "GROK", "STABILITY", "OPENROUTER"]);
 
 export const generateTitlesSchema = z.object({
   tipo: articleTypeEnum,

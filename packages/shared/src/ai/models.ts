@@ -19,4 +19,12 @@ export const AI_MODELS = {
   stability: {
     image: process.env.STABILITY_IMAGE_MODEL || "sd3.5-large",
   },
+  // OpenRouter é só texto nesta versão (ver DECISIONS.md). O padrão é o
+  // slug atual do DeepSeek V4 Flash no catálogo do OpenRouter, confirmado em
+  // https://openrouter.ai/deepseek/deepseek-v4-flash-0731 (build de
+  // 2026-07-31; "deepseek/deepseek-v4-flash" sem sufixo é o preview antigo
+  // de abril/2026 e não deve ser usado).
+  openrouter: {
+    text: process.env.OPENROUTER_DEFAULT_MODEL || "deepseek/deepseek-v4-flash-0731",
+  },
 } as const;

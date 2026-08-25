@@ -160,6 +160,17 @@ Estado da build do clone pessoal do Wordbee. Atualizado ao final de cada prompt.
 - **(4) Geração unitária não depende do worker**: confirmado, tanto pelo código quanto pelo teste acima rodando com o worker inteiramente fora do ar. `POST /api/articles/generate` chama `runUnitArticlePipeline` diretamente dentro da própria rota do Next.js (síncrono, streaming) — nunca passa pela fila BullMQ nem pelo processo do worker. Só as **Linhas de Produção** (execução automática/agendada) dependem do worker estar rodando em algum host always-on (ver `VERCEL-ENV.md`).
 - Não havia chave de IA de teste configurada em produção, então não foi possível (nem tentado) gerar um artigo de verdade — só o caminho de validação/erro foi exercitado, conforme combinado.
 
+## ✅ OpenRouter (DeepSeek V4) como 5º provedor de texto (concluído em 2026-08-25)
+
+- **`OpenRouterProvider`** (`packages/shared/src/ai/openrouter.ts`) implementa `TextProvider` (`generateTitles`/`generateArticle`), reaproveitando a mesma estrutura do client OpenAI (endpoint compatível `/chat/completions`) — só trocam `base_url` (`https://openrouter.ai/api/v1`), o modelo (`AI_MODELS.openrouter.text`, configurável via `OPENROUTER_DEFAULT_MODEL`, padrão `deepseek/deepseek-v4-flash-0731` — slug confirmado em openrouter.ai em 2026-08-25) e os headers extras recomendados pelo OpenRouter (`HTTP-Referer`, `X-Title`, valores genéricos do projeto).
+- **Só texto nesta versão** — sem card na aba de imagem; `createImageProvider`/`createTextProvider` (`packages/shared/src/ai/index.ts`) lançam erro explícito se chamados fora da capacidade suportada, mesmo padrão já usado para Stability (só imagem).
+- **Novo `AiErrorCode` "insufficient_credits"** (`packages/shared/src/ai/errors.ts`) para o HTTP 402 que o OpenRouter usa quando o saldo acaba, com mensagem em PT-BR ("Créditos insuficientes no OpenRouter. Adicione créditos em openrouter.ai."). `classifyHttpError` ganhou esse caso de forma genérica (não específica de provedor).
+- **Validação da chave via `GET /models`** (não consome créditos), mesmo padrão de OpenAI/Grok.
+- **Enum `AiProvider` do Prisma** ganhou `OPENROUTER` (migração `20260825105312_add_openrouter_provider`, aplicada em produção).
+- **Card em "Chaves de API" e selects de "IA para texto"** (Criar Artigo, Nova Linha de Produção) aparecem automaticamente ao adicionar o provedor em `TEXT_PROVIDERS` (`packages/shared/src/ai/registry.ts`) — essas telas já liam a lista de provedores configurados dinamicamente, sem nenhum select hardcoded para ajustar.
+- **7 novos testes** em `packages/shared/src/ai/openrouter.test.ts` (título com sucesso incluindo headers extras, créditos insuficientes, chave inválida, timeout, geração de artigo) + 1 teste novo em `errors.test.ts` para o 402. 78/78 testes passando.
+- Ver `DECISIONS.md` para o motivo de negócio (OpenRouter como alternativa de pagamento ao DeepSeek direto).
+
 ## Como rodar localmente
 
 ```bash

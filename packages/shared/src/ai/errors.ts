@@ -1,10 +1,18 @@
-export type AiErrorCode = "invalid_key" | "rate_limit" | "timeout" | "content_blocked" | "unavailable" | "unknown";
+export type AiErrorCode =
+  | "invalid_key"
+  | "rate_limit"
+  | "insufficient_credits"
+  | "timeout"
+  | "content_blocked"
+  | "unavailable"
+  | "unknown";
 
 const PROVIDER_LABELS: Record<string, string> = {
   openai: "OpenAI",
   gemini: "Gemini",
   grok: "Grok (xAI)",
   stability: "Stability AI",
+  openrouter: "OpenRouter",
 };
 
 /** Erro normalizado de provedor de IA, com mensagem pronta para exibir em PT-BR. */
@@ -30,6 +38,8 @@ function buildUserMessage(code: AiErrorCode, provider: string): string {
       return `Chave de API do ${label} inválida ou sem permissão. Verifique a chave cadastrada em Chaves de API.`;
     case "rate_limit":
       return `Limite de uso do ${label} atingido. Tente novamente mais tarde ou use outro provedor.`;
+    case "insufficient_credits":
+      return `Créditos insuficientes no ${label}. Adicione créditos em openrouter.ai.`;
     case "timeout":
       return `O ${label} demorou demais para responder. Tente novamente em instantes.`;
     case "content_blocked":
@@ -48,6 +58,12 @@ export function classifyHttpError(status: number, provider: string, bodyText?: s
   }
   if (status === 429) {
     return new AiProviderError("rate_limit", provider, bodyText?.slice(0, 200));
+  }
+  // 402 é o status que o OpenRouter usa para saldo/créditos esgotados (não é
+  // usado pelos demais provedores hoje, mas classificar aqui de forma
+  // genérica evita ter que duplicar essa regra por provedor).
+  if (status === 402) {
+    return new AiProviderError("insufficient_credits", provider, bodyText?.slice(0, 200));
   }
   if (status === 502 || status === 503 || status === 504) {
     return new AiProviderError("unavailable", provider, bodyText?.slice(0, 200));

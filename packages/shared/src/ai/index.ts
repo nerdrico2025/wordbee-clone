@@ -2,6 +2,7 @@ import { createOpenAiTextProvider, createOpenAiImageProvider, validateOpenAiKey 
 import { createGeminiTextProvider, createGeminiImageProvider, validateGeminiKey } from "./gemini.js";
 import { createGrokTextProvider, createGrokImageProvider, validateGrokKey } from "./grok.js";
 import { createStabilityImageProvider, validateStabilityKey } from "./stability.js";
+import { createOpenRouterTextProvider, validateOpenRouterKey } from "./openrouter.js";
 import type { AiProviderName, ImageProvider, TextProvider } from "./types.js";
 
 export function createTextProvider(provider: AiProviderName, apiKey: string): TextProvider {
@@ -12,6 +13,8 @@ export function createTextProvider(provider: AiProviderName, apiKey: string): Te
       return createGeminiTextProvider(apiKey);
     case "GROK":
       return createGrokTextProvider(apiKey);
+    case "OPENROUTER":
+      return createOpenRouterTextProvider(apiKey);
     case "STABILITY":
       throw new Error("Stability AI não oferece geração de texto.");
   }
@@ -27,6 +30,8 @@ export function createImageProvider(provider: AiProviderName, apiKey: string): I
       return createGrokImageProvider(apiKey);
     case "STABILITY":
       return createStabilityImageProvider(apiKey);
+    case "OPENROUTER":
+      throw new Error("OpenRouter não oferece geração de imagem nesta versão.");
   }
 }
 
@@ -40,6 +45,8 @@ export async function validateProviderKey(provider: AiProviderName, apiKey: stri
       return validateGrokKey(apiKey);
     case "STABILITY":
       return validateStabilityKey(apiKey);
+    case "OPENROUTER":
+      return validateOpenRouterKey(apiKey);
   }
 }
 

@@ -34,6 +34,7 @@ Este projeto tem **dois processos**: o app **web** (Next.js, pode rodar na Verce
 | `GROK_TEXT_MODEL` | Override do modelo de texto do Grok | Opcional (padrão `grok-2-latest`) | `grok-2-latest` |
 | `GROK_IMAGE_MODEL` | Override do modelo de imagem do Grok | Opcional (padrão `grok-2-image`) | `grok-2-image` |
 | `STABILITY_IMAGE_MODEL` | Override do modelo da Stability AI | Opcional (padrão `sd3.5-large`) | `sd3.5-large` |
+| `OPENROUTER_DEFAULT_MODEL` | Override do modelo de texto usado via OpenRouter | Opcional (padrão `deepseek/deepseek-v4-flash-0731`) | `deepseek/deepseek-v4-flash-0731` — confira o slug atual em https://openrouter.ai/models antes de trocar |
 
 **Não precisam ir na Vercel:**
 - `ADMIN_EMAIL`, `ADMIN_PASSWORD`, `ADMIN_NAME` — só usadas localmente/uma vez para rodar `npm run db:seed` contra o banco de produção (rode isso da sua máquina, apontando `DATABASE_URL` para o Postgres de produção, antes do primeiro deploy).
@@ -52,7 +53,7 @@ Este projeto tem **dois processos**: o app **web** (Next.js, pode rodar na Verce
 | `STORAGE_DRIVER` / `STORAGE_LOCAL_PATH` | Onde ler as imagens de referência das linhas | Opcional | Se usar `local`, aponte para um disco persistente do próprio host do worker (ex.: volume do Railway/Fly) — **não** o disco da Vercel |
 | `AI_PROVIDER_CONCURRENCY` | Chamadas simultâneas de IA por provedor entre todas as linhas ativas | Opcional (padrão `3`) | `3` |
 | `WORKER_CONCURRENCY` | Quantas linhas o worker processa em paralelo | Opcional (padrão `5`) | `5` |
-| `OPENAI_TEXT_MODEL` … `STABILITY_IMAGE_MODEL` | Mesmos overrides de modelo do app web | Opcional | Mantenha **iguais** aos da Vercel para consistência |
+| `OPENAI_TEXT_MODEL` … `OPENROUTER_DEFAULT_MODEL` | Mesmos overrides de modelo do app web | Opcional | Mantenha **iguais** aos da Vercel para consistência |
 
 **Não precisa no worker:** `SESSION_SECRET`, `SESSION_TTL_HOURS`, `SESSION_COOKIE_NAME`, `LOGIN_RATE_LIMIT_*` (o worker não lida com login/sessão) e `ADMIN_*` (só usado pelo seed).
 

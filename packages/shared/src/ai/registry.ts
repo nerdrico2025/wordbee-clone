@@ -42,6 +42,14 @@ export const TEXT_PROVIDERS: TextProviderInfo[] = [
     keyPrefixPlaceholder: "xai-...",
     docsUrl: "https://console.x.ai",
   },
+  {
+    provider: "OPENROUTER",
+    nome: "OpenRouter",
+    modeloLabel: "DeepSeek V4",
+    descricao: "Acesso a DeepSeek e outros modelos via um único provedor.",
+    keyPrefixPlaceholder: "sk-or-...",
+    docsUrl: "https://openrouter.ai/keys",
+  },
 ];
 
 export const IMAGE_PROVIDERS: ImageProviderInfo[] = [
