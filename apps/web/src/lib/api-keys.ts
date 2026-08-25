@@ -6,9 +6,9 @@ import type { AiProviderName } from "@wordbee/shared";
 
 export type Capability = "TEXTO" | "IMAGEM";
 
-/** OpenAI e Gemini compartilham uma única chave para texto e imagem (RF-13). */
+/** OpenAI, Gemini e OpenRouter compartilham uma única chave para texto e imagem (RF-13). */
 function tipoForSave(provider: AiProviderName, capability: Capability): ApiKeyKind {
-  if (provider === "OPENAI" || provider === "GEMINI") return "AMBOS";
+  if (provider === "OPENAI" || provider === "GEMINI" || provider === "OPENROUTER") return "AMBOS";
   return capability;
 }
 

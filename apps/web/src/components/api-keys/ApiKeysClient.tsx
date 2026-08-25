@@ -46,8 +46,8 @@ export function ApiKeysClient({ initial }: { initial: { texto: ApiKeyCard[]; ima
           <p className="font-semibold text-zinc-800 dark:text-zinc-100">Segurança das suas chaves</p>
           <p className="mt-1">
             Todas as chaves são criptografadas com AES-256-GCM antes de serem salvas e nunca são exibidas em texto
-            puro depois de cadastradas. Um provedor que serve texto e imagem (OpenAI, Gemini) usa a mesma chave nas
-            duas abas — você só precisa cadastrar uma vez.
+            puro depois de cadastradas. Um provedor que serve texto e imagem (OpenAI, Gemini, OpenRouter) usa a mesma
+            chave nas duas abas — você só precisa cadastrar uma vez.
           </p>
         </div>
       </div>

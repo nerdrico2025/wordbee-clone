@@ -2,6 +2,17 @@
 
 Registro de decisões tomadas de forma autônoma diante de ambiguidades do PRD, conforme a regra 3 do prompt de contexto. Cada entrada tem uma linha de justificativa.
 
+## OpenRouter como provedor de imagem (2026-08-25)
+
+- **Motivo de negócio**: evitar depender só da cota diária gratuita do Gemini direto (1500 req/dia texto, **500/dia imagem**, já esgotada em testes anteriores — ver PROMPT 2/3) e consolidar o billing pago em um único provedor (OpenRouter), já integrado para texto nesta mesma entrega.
+- **Endpoint próprio, diferente do de texto**: o OpenRouter tem uma Image API dedicada (`POST /images`, formato de request/response distinto de `/chat/completions`) — `createOpenRouterImageProvider` (`packages/shared/src/ai/openrouter.ts`) implementa `ImageProvider` chamando esse endpoint, reaproveitando a mesma constante `EXTRA_HEADERS`/autenticação Bearer do provider de texto no mesmo arquivo.
+- **Modelo padrão confirmado na fonte (2026-08-25)**: `google/gemini-2.5-flash-image` ("Nano Banana") via `GET /api/v1/models?output_modalities=image` — mesmo modelo comercial já usado no provider Gemini direto, agora acessível também via OpenRouter. Configurável por `OPENROUTER_IMAGE_DEFAULT_MODEL`.
+- **Imagens de referência via `input_references`** (array de `{ type: "image_url", image_url: { url } }`, aceitando `data:` URL): o array de `referenceImages` (já limitado a 5 por linha em `production-lines.ts`, RF-25) é repassado integralmente como `data:${mimeType};base64,${base64}` — nenhum limite adicional no provider, mesmo padrão do `gemini.ts` (que também apenas itera o array recebido).
+- **Fallback silencioso quando o modelo não suporta `input_references`**: a API não tem um jeito barato de checar `supported_parameters` do endpoint antes de cada chamada (exigiria uma requisição extra à Image Models API a cada geração), então o cliente tenta com referência e, se o OpenRouter responder 400 mencionando `input_references` no corpo, refaz a chamada sem referência (loga um aviso, não falha o artigo). Um 400 por outro motivo (ex.: prompt ausente) continua propagando o erro normalmente — só esse padrão específico aciona o fallback.
+- **Reaproveita o `AiErrorCode` "insufficient_credits"** já criado para o provider de texto (mesmo status 402, mesma API/conta de billing do OpenRouter).
+- **Chave compartilhada entre texto e imagem (RF-13)**: `tipoForSave` (`apps/web/src/lib/api-keys.ts`) passou a tratar `OPENROUTER` como `AMBOS`, igual a OpenAI/Gemini — o card na aba "IAs para Imagens" reaproveita a mesma chave já validada na aba de texto, sem pedir de novo (mesmo mecanismo de `listApiKeyCards`/`ProviderCard`, nenhuma tela nova).
+- **Sem select hardcoded para ajustar**: adicionar a entrada em `IMAGE_PROVIDERS` (`packages/shared/src/ai/registry.ts`, com `suportaImagensReferencia: true`) foi suficiente para o OpenRouter aparecer nos selects de "IA para imagem" de Criar Artigo e Nova Linha de Produção — ambos já liam a lista de provedores configurados dinamicamente (confirmado na entrega do provider de texto).
+
 ## OpenRouter como novo provedor de texto (2026-08-25)
 
 - **Motivo de negócio**: OpenRouter foi adicionado como alternativa de pagamento ao DeepSeek direto — a API oficial da DeepSeek exige cartão internacional (bloqueado para o usuário) e/ou tem mínimo de recarga alto para uso pessoal esporádico. O OpenRouter aceita outros métodos de pagamento e permite recargas pequenas, servindo o mesmo modelo (DeepSeek V4 Flash) via uma API compatível com o formato da OpenAI.

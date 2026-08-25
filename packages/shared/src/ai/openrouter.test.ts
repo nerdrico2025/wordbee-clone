@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { fetch as undiciFetch } from "undici";
-import { createOpenRouterTextProvider, validateOpenRouterKey } from "./openrouter.js";
+import { createOpenRouterTextProvider, createOpenRouterImageProvider, validateOpenRouterKey } from "./openrouter.js";
 import { AiProviderError } from "./errors.js";
 
 vi.mock("undici", async () => {
@@ -92,6 +92,103 @@ describe("OpenRouterProvider", () => {
     expect(article.contentHtml).toBe("<p>Conteúdo</p>");
     expect(article.metaTitle).toBe("Título SEO");
     expect(article.slug).toBe("bolo-de-cenoura-fofinho");
+  });
+});
+
+describe("OpenRouterImageProvider", () => {
+  const fetchMock = undiciFetch as unknown as ReturnType<typeof vi.fn>;
+  const provider = createOpenRouterImageProvider("sk-or-fake-key");
+
+  beforeEach(() => {
+    fetchMock.mockReset();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("geração simples (sem referência): chama POST /images e retorna a imagem em base64", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({ data: [{ b64_json: "IMG_B64", media_type: "image/png" }] }));
+
+    const image = await provider.generateImage({ prompt: "um bolo de cenoura" });
+    expect(image).toEqual({ base64: "IMG_B64", mimeType: "image/png" });
+
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(url).toBe("https://openrouter.ai/api/v1/images");
+    const headers = init.headers as Record<string, string>;
+    expect(headers.Authorization).toBe("Bearer sk-or-fake-key");
+    expect(headers["HTTP-Referer"]).toBeTruthy();
+
+    const body = JSON.parse(init.body as string);
+    expect(body.model).toMatch(/gemini-2\.5-flash-image/);
+    expect(body.input_references).toBeUndefined();
+  });
+
+  it("geração com imagens de referência: envia input_references como data URLs", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({ data: [{ b64_json: "IMG_B64", media_type: "image/png" }] }));
+
+    await provider.generateImage({
+      prompt: "um bolo de cenoura",
+      referenceImages: [
+        { base64: "REF1", mimeType: "image/jpeg" },
+        { base64: "REF2", mimeType: "image/webp" },
+      ],
+    });
+
+    const [, init] = fetchMock.mock.calls[0]!;
+    const body = JSON.parse(init.body as string);
+    expect(body.input_references).toEqual([
+      { type: "image_url", image_url: { url: "data:image/jpeg;base64,REF1" } },
+      { type: "image_url", image_url: { url: "data:image/webp;base64,REF2" } },
+    ]);
+  });
+
+  it("créditos insuficientes (402) vira insufficient_credits", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({ error: { code: 402, message: "Insufficient credits" } }, 402));
+
+    const err = await provider.generateImage({ prompt: "um bolo de cenoura" }).catch((e) => e);
+    expect(err).toBeInstanceOf(AiProviderError);
+    expect((err as AiProviderError).code).toBe("insufficient_credits");
+  });
+
+  it("timeout: fetch abortado vira AiProviderError('timeout')", async () => {
+    fetchMock.mockRejectedValueOnce(Object.assign(new Error("aborted"), { name: "AbortError" }));
+
+    const err = await provider.generateImage({ prompt: "um bolo de cenoura" }).catch((e) => e);
+    expect(err).toBeInstanceOf(AiProviderError);
+    expect((err as AiProviderError).code).toBe("timeout");
+  });
+
+  it("modelo sem suporte a input_references: refaz a chamada sem referência em vez de falhar", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    fetchMock
+      .mockResolvedValueOnce(
+        jsonResponse({ error: { message: 'Model does not support "input_references" for this endpoint' } }, 400)
+      )
+      .mockResolvedValueOnce(jsonResponse({ data: [{ b64_json: "IMG_B64", media_type: "image/png" }] }));
+
+    const image = await provider.generateImage({
+      prompt: "um bolo de cenoura",
+      referenceImages: [{ base64: "REF1", mimeType: "image/jpeg" }],
+    });
+
+    expect(image).toEqual({ base64: "IMG_B64", mimeType: "image/png" });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    const firstBody = JSON.parse(fetchMock.mock.calls[0]![1].body as string);
+    expect(firstBody.input_references).toBeDefined();
+    const secondBody = JSON.parse(fetchMock.mock.calls[1]![1].body as string);
+    expect(secondBody.input_references).toBeUndefined();
+  });
+
+  it("erro 400 não relacionado a input_references não aciona o fallback (propaga o erro)", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({ error: { message: "prompt is required" } }, 400));
+
+    const err = await provider
+      .generateImage({ prompt: "um bolo de cenoura", referenceImages: [{ base64: "REF1", mimeType: "image/jpeg" }] })
+      .catch((e) => e);
+    expect(err).toBeInstanceOf(AiProviderError);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
 

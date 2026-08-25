@@ -2,7 +2,7 @@ import { createOpenAiTextProvider, createOpenAiImageProvider, validateOpenAiKey 
 import { createGeminiTextProvider, createGeminiImageProvider, validateGeminiKey } from "./gemini.js";
 import { createGrokTextProvider, createGrokImageProvider, validateGrokKey } from "./grok.js";
 import { createStabilityImageProvider, validateStabilityKey } from "./stability.js";
-import { createOpenRouterTextProvider, validateOpenRouterKey } from "./openrouter.js";
+import { createOpenRouterTextProvider, createOpenRouterImageProvider, validateOpenRouterKey } from "./openrouter.js";
 import type { AiProviderName, ImageProvider, TextProvider } from "./types.js";
 
 export function createTextProvider(provider: AiProviderName, apiKey: string): TextProvider {
@@ -31,7 +31,7 @@ export function createImageProvider(provider: AiProviderName, apiKey: string): I
     case "STABILITY":
       return createStabilityImageProvider(apiKey);
     case "OPENROUTER":
-      throw new Error("OpenRouter não oferece geração de imagem nesta versão.");
+      return createOpenRouterImageProvider(apiKey);
   }
 }
 

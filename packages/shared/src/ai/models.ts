@@ -19,12 +19,15 @@ export const AI_MODELS = {
   stability: {
     image: process.env.STABILITY_IMAGE_MODEL || "sd3.5-large",
   },
-  // OpenRouter é só texto nesta versão (ver DECISIONS.md). O padrão é o
-  // slug atual do DeepSeek V4 Flash no catálogo do OpenRouter, confirmado em
+  // O padrão de texto é o slug atual do DeepSeek V4 Flash no catálogo do
+  // OpenRouter, confirmado em
   // https://openrouter.ai/deepseek/deepseek-v4-flash-0731 (build de
   // 2026-07-31; "deepseek/deepseek-v4-flash" sem sufixo é o preview antigo
-  // de abril/2026 e não deve ser usado).
+  // de abril/2026 e não deve ser usado). O padrão de imagem é o mesmo
+  // "Nano Banana" (Gemini 2.5 Flash Image) usado no provedor Gemini direto,
+  // confirmado via GET /api/v1/models?output_modalities=image em 2026-08-25.
   openrouter: {
     text: process.env.OPENROUTER_DEFAULT_MODEL || "deepseek/deepseek-v4-flash-0731",
+    image: process.env.OPENROUTER_IMAGE_DEFAULT_MODEL || "google/gemini-2.5-flash-image",
   },
 } as const;

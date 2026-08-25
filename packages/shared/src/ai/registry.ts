@@ -90,4 +90,13 @@ export const IMAGE_PROVIDERS: ImageProviderInfo[] = [
     gratuitoNota: "Créditos grátis para novos usuários!",
     docsUrl: "https://platform.stability.ai/account/keys",
   },
+  {
+    provider: "OPENROUTER",
+    nome: "OpenRouter",
+    modeloLabel: "Nano Banana",
+    descricao: "Gemini 2.5 Flash Image via OpenRouter. Mesma chave já cadastrada na aba de texto.",
+    keyPrefixPlaceholder: "sk-or-...",
+    docsUrl: "https://openrouter.ai/keys",
+    suportaImagensReferencia: true,
+  },
 ];

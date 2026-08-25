@@ -163,13 +163,24 @@ Estado da build do clone pessoal do Wordbee. Atualizado ao final de cada prompt.
 ## ✅ OpenRouter (DeepSeek V4) como 5º provedor de texto (concluído em 2026-08-25)
 
 - **`OpenRouterProvider`** (`packages/shared/src/ai/openrouter.ts`) implementa `TextProvider` (`generateTitles`/`generateArticle`), reaproveitando a mesma estrutura do client OpenAI (endpoint compatível `/chat/completions`) — só trocam `base_url` (`https://openrouter.ai/api/v1`), o modelo (`AI_MODELS.openrouter.text`, configurável via `OPENROUTER_DEFAULT_MODEL`, padrão `deepseek/deepseek-v4-flash-0731` — slug confirmado em openrouter.ai em 2026-08-25) e os headers extras recomendados pelo OpenRouter (`HTTP-Referer`, `X-Title`, valores genéricos do projeto).
-- **Só texto nesta versão** — sem card na aba de imagem; `createImageProvider`/`createTextProvider` (`packages/shared/src/ai/index.ts`) lançam erro explícito se chamados fora da capacidade suportada, mesmo padrão já usado para Stability (só imagem).
+- **Só texto nesta entrega inicial** — sem card na aba de imagem ainda; `createImageProvider`/`createTextProvider` (`packages/shared/src/ai/index.ts`) lançavam erro explícito se chamados fora da capacidade suportada, mesmo padrão já usado para Stability (só imagem). **Atualização abaixo: o suporte a imagem foi adicionado no mesmo dia.**
 - **Novo `AiErrorCode` "insufficient_credits"** (`packages/shared/src/ai/errors.ts`) para o HTTP 402 que o OpenRouter usa quando o saldo acaba, com mensagem em PT-BR ("Créditos insuficientes no OpenRouter. Adicione créditos em openrouter.ai."). `classifyHttpError` ganhou esse caso de forma genérica (não específica de provedor).
 - **Validação da chave via `GET /models`** (não consome créditos), mesmo padrão de OpenAI/Grok.
 - **Enum `AiProvider` do Prisma** ganhou `OPENROUTER` (migração `20260825105312_add_openrouter_provider`, aplicada em produção).
 - **Card em "Chaves de API" e selects de "IA para texto"** (Criar Artigo, Nova Linha de Produção) aparecem automaticamente ao adicionar o provedor em `TEXT_PROVIDERS` (`packages/shared/src/ai/registry.ts`) — essas telas já liam a lista de provedores configurados dinamicamente, sem nenhum select hardcoded para ajustar.
 - **7 novos testes** em `packages/shared/src/ai/openrouter.test.ts` (título com sucesso incluindo headers extras, créditos insuficientes, chave inválida, timeout, geração de artigo) + 1 teste novo em `errors.test.ts` para o 402. 78/78 testes passando.
 - Ver `DECISIONS.md` para o motivo de negócio (OpenRouter como alternativa de pagamento ao DeepSeek direto).
+
+## ✅ OpenRouter também como provedor de imagem — "Nano Banana" (concluído em 2026-08-25)
+
+- **`createOpenRouterImageProvider`** (`packages/shared/src/ai/openrouter.ts`) implementa `ImageProvider` via `POST https://openrouter.ai/api/v1/images` (endpoint próprio de imagem, formato diferente de `/chat/completions`), reaproveitando a mesma chave/autenticação Bearer e os mesmos headers extras do provider de texto.
+- **Modelo padrão `google/gemini-2.5-flash-image`** ("Nano Banana", slug confirmado via `GET /api/v1/models?output_modalities=image`), configurável por `OPENROUTER_IMAGE_DEFAULT_MODEL`.
+- **Suporta imagens de referência** (`input_references`, até 5 por linha — mesmo limite já existente em `production-lines.ts`, RF-25), com **fallback automático**: se o modelo configurado não aceitar `input_references` (400 mencionando o parâmetro no corpo), refaz a chamada sem referência em vez de falhar o artigo inteiro (loga um aviso).
+- **Reaproveita o `AiErrorCode` "insufficient_credits"** criado para o provider de texto (mesmo status 402, mesma conta de billing).
+- **Chave compartilhada entre texto e imagem** (RF-13): `tipoForSave` (`apps/web/src/lib/api-keys.ts`) passou a tratar `OPENROUTER` como `AMBOS` — o card em "IAs para Imagens" reaproveita a chave já cadastrada na aba de texto, sem pedir de novo.
+- **Card e selects de "IA para imagem"** aparecem automaticamente via `IMAGE_PROVIDERS` (`packages/shared/src/ai/registry.ts`), sem tocar em nenhuma tela hardcoded.
+- **6 novos testes** (geração simples, com referência, créditos insuficientes, timeout, fallback de referência não suportada, 400 genérico que não aciona o fallback). **84/84 testes passando** no total.
+- Ver `DECISIONS.md` para o motivo de negócio (evitar depender só da cota gratuita do Gemini direto e consolidar billing em um único provedor).
 
 ## Como rodar localmente
 
