@@ -12,6 +12,85 @@ function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
 }
 
+// --- Helpers de resposta em streaming (SSE), usados por chatCompletion
+// (generateTitles/generateArticle) desde a mudança de timeout fixo pra
+// idle-timeout em 2026-08-27 — ver DECISIONS.md.
+
+type FakeReader = { read: () => Promise<{ value?: Uint8Array; done: boolean }> };
+type FakeStreamResponse = { ok: true; body: { getReader: () => FakeReader } };
+
+function sseLine(delta: string | null): string {
+  return delta === null ? "data: [DONE]\n\n" : `data: ${JSON.stringify({ choices: [{ delta: { content: delta } }] })}\n\n`;
+}
+
+/** Reader cujos chunks (já prontos, um por `read()`) chegam imediatamente, sem gap. */
+function immediateSseStream(deltas: Array<string | null>): FakeStreamResponse {
+  let i = 0;
+  const encoder = new TextEncoder();
+  return {
+    ok: true,
+    body: {
+      getReader: () => ({
+        read: async () => {
+          if (i >= deltas.length) return { done: true, value: undefined };
+          const value = encoder.encode(sseLine(deltas[i]!));
+          i++;
+          return { done: false, value };
+        },
+      }),
+    },
+  };
+}
+
+/** Reader cujos chunks só chegam depois de `gapMs` (via setTimeout, controlável com fake timers). */
+function spacedSseStream(deltas: Array<string | null>, gapMs: number): FakeStreamResponse {
+  let i = 0;
+  const encoder = new TextEncoder();
+  return {
+    ok: true,
+    body: {
+      getReader: () => ({
+        read: () =>
+          new Promise((resolve) => {
+            if (i >= deltas.length) {
+              resolve({ done: true, value: undefined });
+              return;
+            }
+            const delta = deltas[i]!;
+            i++;
+            setTimeout(() => resolve({ done: false, value: encoder.encode(sseLine(delta)) }), gapMs);
+          }),
+      }),
+    },
+  };
+}
+
+/** Reader que nunca resolve sozinho — só quando o AbortSignal da chamada dispara (idle/max timeout). */
+function mockHangingStream(fetchMock: ReturnType<typeof vi.fn>): void {
+  fetchMock.mockImplementationOnce((_url: string, init: { signal: AbortSignal }) =>
+    Promise.resolve({
+      ok: true,
+      body: {
+        getReader: () => ({
+          read: () =>
+            new Promise((_resolve, reject) => {
+              init.signal.addEventListener("abort", () => {
+                reject(Object.assign(new Error("The operation was aborted"), { name: "AbortError" }));
+              });
+            }),
+        }),
+      },
+    })
+  );
+}
+
+function splitIntoChunks(text: string, n: number): string[] {
+  const size = Math.ceil(text.length / n);
+  const chunks: string[] = [];
+  for (let i = 0; i < text.length; i += size) chunks.push(text.slice(i, i + size));
+  return chunks;
+}
+
 describe("OpenRouterProvider", () => {
   const fetchMock = undiciFetch as unknown as ReturnType<typeof vi.fn>;
   const provider = createOpenRouterTextProvider("sk-or-fake-key");
@@ -25,10 +104,8 @@ describe("OpenRouterProvider", () => {
     vi.useRealTimers();
   });
 
-  it("generateTitles: sucesso, envia Authorization/HTTP-Referer/X-Title e retorna a lista de títulos", async () => {
-    fetchMock.mockResolvedValueOnce(
-      jsonResponse({ choices: [{ message: { content: '["Título 1", "Título 2"]' } }] })
-    );
+  it("generateTitles: sucesso (via streaming), envia Authorization/HTTP-Referer/X-Title/stream:true e retorna a lista de títulos", async () => {
+    fetchMock.mockResolvedValueOnce(immediateSseStream(['["Título 1", "Título 2"]', null]));
 
     const titles = await provider.generateTitles({ tipo: "RECEITA", tema: "bolo de cenoura" });
     expect(titles).toEqual(["Título 1", "Título 2"]);
@@ -42,6 +119,7 @@ describe("OpenRouterProvider", () => {
 
     const body = JSON.parse(init.body as string);
     expect(body.model).toMatch(/deepseek/);
+    expect(body.stream).toBe(true);
   });
 
   it("erro de créditos insuficientes (402) vira insufficient_credits com mensagem em português", async () => {
@@ -72,21 +150,12 @@ describe("OpenRouterProvider", () => {
     expect((err as AiProviderError).code).toBe("timeout");
   });
 
-  it("generateArticle: sucesso, parseia o JSON e usa o slug do título", async () => {
+  it("generateArticle: sucesso (via streaming), parseia o JSON e usa o slug do título", async () => {
     fetchMock.mockResolvedValueOnce(
-      jsonResponse({
-        choices: [
-          {
-            message: {
-              content: JSON.stringify({
-                contentHtml: "<p>Conteúdo</p>",
-                excerpt: "Resumo curto",
-                metaTitle: "Título SEO",
-              }),
-            },
-          },
-        ],
-      })
+      immediateSseStream([
+        JSON.stringify({ contentHtml: "<p>Conteúdo</p>", excerpt: "Resumo curto", metaTitle: "Título SEO" }),
+        null,
+      ])
     );
 
     const article = await provider.generateArticle({ tipo: "RECEITA", tema: "bolo de cenoura", titulo: "Bolo de Cenoura Fofinho" });
@@ -95,49 +164,50 @@ describe("OpenRouterProvider", () => {
     expect(article.slug).toBe("bolo-de-cenoura-fofinho");
   });
 
-  // Regressão do bug real de produção (2026-08-25): geração de artigo via
-  // OpenRouter ficava pendurada indefinidamente (5+ min, sem erro) quando
-  // os headers da resposta chegavam rápido mas o corpo (um artigo inteiro)
-  // demorava para terminar de chegar — o timeout só cobria o connect/
-  // headers, não a leitura do corpo (ver fix em packages/shared/src/ai/http.ts).
-  // O mock abaixo simula exatamente isso: `fetch()` resolve na hora (como
-  // se os headers já tivessem chegado), mas `.json()` só resolve/rejeita
-  // quando o AbortSignal passado pra ele dispara — igual ao comportamento
-  // real do undici ao ler o corpo de uma resposta abortada meio do caminho.
-  function mockHangingBody() {
-    fetchMock.mockImplementationOnce((_url: string, init: { signal: AbortSignal }) =>
-      Promise.resolve({
-        ok: true,
-        json: () =>
-          new Promise((_resolve, reject) => {
-            init.signal.addEventListener("abort", () => {
-              reject(Object.assign(new Error("The operation was aborted"), { name: "AbortError" }));
-            });
-          }),
-      })
-    );
-  }
-
-  it("generateArticle: corpo da resposta nunca termina de chegar — estoura o timeout (90s) em vez de ficar pendurado para sempre", async () => {
+  // Mudança de timeout fixo (60s/90s) pra idle timeout com streaming
+  // (2026-08-27, ver DECISIONS.md) — motivada por um padrão real de
+  // produção: a maioria das chamadas ao OpenRouter batia exatamente o teto
+  // fixo, incluindo respostas que provavelmente estavam progredindo
+  // normalmente, só demorando mais que o teto pra terminar um artigo longo.
+  it("generateArticle: nenhum chunk chega (silêncio total) além do idle timeout (20s) — aborta em vez de ficar pendurado", async () => {
     vi.useFakeTimers();
-    mockHangingBody();
+    mockHangingStream(fetchMock);
 
     const promise = provider.generateArticle({ tipo: "RECEITA", tema: "bolo de cenoura", titulo: "Bolo de Cenoura" });
     const expectation = expect(promise).rejects.toMatchObject({ code: "timeout" });
-    await vi.advanceTimersByTimeAsync(90_000);
+    await vi.advanceTimersByTimeAsync(20_000);
     await expectation;
   });
 
-  it("generateTitles usa o MESMO mecanismo de timeout que generateArticle, só que com a janela padrão (mais curta)", async () => {
+  it("generateTitles usa o MESMO mecanismo de idle timeout que generateArticle", async () => {
     vi.useFakeTimers();
-    mockHangingBody();
+    mockHangingStream(fetchMock);
 
     const promise = provider.generateTitles({ tipo: "RECEITA", tema: "bolo de cenoura" });
     const expectation = expect(promise).rejects.toMatchObject({ code: "timeout" });
-    // Timeout padrão do provider (60s) — bem menor que os 90s de
-    // generateArticle, mas o mesmo AbortController/AiErrorCode "timeout".
-    await vi.advanceTimersByTimeAsync(60_000);
+    await vi.advanceTimersByTimeAsync(20_000);
     await expectation;
+  });
+
+  it("generateArticle: resposta longa com chunks espaçados (nenhum gap > idle timeout) completa com sucesso, mesmo levando mais que os 90s do teto fixo antigo no total", async () => {
+    vi.useFakeTimers();
+    const fullJson = JSON.stringify({
+      contentHtml: "<p>Artigo bem longo, gerado aos poucos, chunk por chunk.</p>",
+      excerpt: "Resumo",
+      metaTitle: "Título SEO",
+    });
+    const pieces = splitIntoChunks(fullJson, 8); // 8 pedaços + [DONE] = 9 reads
+    const gapMs = 15_000; // < 20s de idle timeout, mas 9 × 15s = 135s > 90s do teto fixo antigo
+    fetchMock.mockResolvedValueOnce(spacedSseStream([...pieces, null], gapMs));
+
+    const promise = provider.generateArticle({ tipo: "RECEITA", tema: "bolo de cenoura", titulo: "Bolo de Cenoura" });
+    for (let i = 0; i <= pieces.length; i++) {
+      await vi.advanceTimersByTimeAsync(gapMs);
+    }
+
+    const article = await promise;
+    expect(article.contentHtml).toBe("<p>Artigo bem longo, gerado aos poucos, chunk por chunk.</p>");
+    expect(article.metaTitle).toBe("Título SEO");
   });
 });
 

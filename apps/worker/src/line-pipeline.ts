@@ -27,6 +27,21 @@ function pickRandomTema(temas: string[]): string {
   return temas[Math.floor(Math.random() * temas.length)]!;
 }
 
+// ±10% de jitter aleatório sobre o intervalo da linha — evita que várias
+// linhas com o mesmo intervaloMin (ex.: criadas juntas, todas de 60min)
+// convirjam pra sempre disparar no mesmo minuto ao longo do tempo, gerando
+// rajadas simultâneas de chamadas de IA. Só se aplica aos pontos em que o
+// PRÓXIMO ciclo é calculado a partir de intervaloMin — nunca na primeira
+// execução (delay 0 na criação da linha, calculado em apps/web, que nunca
+// passa por aqui) nem no defer de rate limit (RATE_LIMIT_DEFER_MS é fixo).
+// Math.max(0, ...) é só defensivo: com jitter de ±10% sobre um valor
+// positivo o resultado nunca fica negativo de verdade. Ver DECISIONS.md.
+function jitteredIntervalMs(intervaloMin: number): number {
+  const baseMs = intervaloMin * 60_000;
+  const jitterMs = baseMs * 0.1 * (Math.random() * 2 - 1);
+  return Math.max(0, Math.round(baseMs + jitterMs));
+}
+
 function buildImagePrompt(titulo: string, tema: string): string {
   return `Imagem destacada para um artigo de blog em português sobre "${titulo}" (tema: ${tema}). Fotografia realista, boa iluminação, alta qualidade, sem texto ou letras sobrepostas na imagem.`;
 }
@@ -159,7 +174,7 @@ async function runProductionLineInner(redis: Redis, lineId: string, log: LogFn):
     log({ lineId, event: "idempotencia_ja_publicado", detail: existingArticle.id });
     await prisma.productionLine.update({
       where: { id: lineId },
-      data: { nextRunAt: new Date(Date.now() + line.intervaloMin * 60_000) },
+      data: { nextRunAt: new Date(Date.now() + jitteredIntervalMs(line.intervaloMin)) },
     });
     return;
   }
@@ -302,7 +317,7 @@ async function runProductionLineInner(redis: Redis, lineId: string, log: LogFn):
       lastRunAt: new Date(),
       ...(atingiuMaximo
         ? { status: "CONCLUIDA", pauseReason: "Máximo de artigos atingido.", nextRunAt: null }
-        : { nextRunAt: new Date(Date.now() + line.intervaloMin * 60_000) }),
+        : { nextRunAt: new Date(Date.now() + jitteredIntervalMs(line.intervaloMin)) }),
     },
   });
 
@@ -316,7 +331,7 @@ async function runProductionLineInner(redis: Redis, lineId: string, log: LogFn):
 async function handleDeterministicFailure(lineId: string, currentFailures: number, message: string, intervaloMin: number): Promise<void> {
   const consecutiveFailures = currentFailures + 1;
   const shouldPause = consecutiveFailures >= CONSECUTIVE_FAILURES_TO_PAUSE;
-  const nextRunAt = new Date(Date.now() + intervaloMin * 60_000);
+  const nextRunAt = new Date(Date.now() + jitteredIntervalMs(intervaloMin));
 
   await prisma.productionLine.update({
     where: { id: lineId },

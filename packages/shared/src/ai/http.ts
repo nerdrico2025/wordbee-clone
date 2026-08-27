@@ -1,13 +1,14 @@
 import { fetch as undiciFetch, type RequestInit as UndiciRequestInit } from "undici";
 import { AiProviderError, classifyHttpError } from "./errors.js";
 
-// Padrão para chamadas rápidas (sugestão de título, validação de chave,
-// listagem de modelos). Chamadas naturalmente mais longas (geração de
-// artigo completo, geração de imagem) devem passar um `timeoutMs` maior
-// explicitamente — ver `ARTICLE_TIMEOUT_MS` em cada provider. Ver
-// DECISIONS.md sobre o bug corrigido em 2026-08-25 (geração de artigo via
-// OpenRouter travava pra sempre): antes, esse timeout só cobria o
-// connect/headers, não a leitura do corpo da resposta.
+// Padrão para chamadas que não fazem streaming (validação de chave,
+// listagem de modelos, geração de imagem — a Image API do OpenRouter não
+// suporta streaming). Chamadas de texto (título/artigo) usam
+// `fetchStreamedTextOrThrow` abaixo, com timeout de inatividade em vez de
+// um teto fixo — ver DECISIONS.md (2026-08-27). Ver também DECISIONS.md
+// sobre o bug corrigido em 2026-08-25 (geração de artigo via OpenRouter
+// travava pra sempre): antes, esse timeout só cobria o connect/headers,
+// não a leitura do corpo da resposta.
 const DEFAULT_TIMEOUT_MS = 60_000;
 
 /**
@@ -92,6 +93,120 @@ export async function fetchJsonOrThrow(
     }
     return res.json();
   });
+}
+
+// Timeout de INATIVIDADE (não um teto fixo pra chamada inteira): reseta a
+// cada chunk novo recebido no stream. Ver DECISIONS.md (2026-08-27) — um
+// teto fixo (60s/90s) matava chamadas que estavam progredindo normalmente,
+// só demorando mais que o teto pra terminar um artigo longo.
+const DEFAULT_IDLE_TIMEOUT_MS = 20_000;
+// Teto absoluto de segurança, bem mais alto que o idle timeout — só pra
+// garantir que uma conexão com chunks esporádicos (nunca ficando ociosa
+// tempo suficiente pra estourar o idle timeout, mas também nunca
+// terminando) não fique presa indefinidamente.
+const DEFAULT_MAX_TIMEOUT_MS = 5 * 60_000;
+
+export interface StreamedTextOptions {
+  idleTimeoutMs?: number;
+  maxTimeoutMs?: number;
+}
+
+interface OpenAiStreamChunk {
+  choices?: Array<{ delta?: { content?: string } }>;
+}
+
+/**
+ * Faz fetch com `stream: true` (formato SSE compatível com OpenAI: linhas
+ * "data: {...}\n\n" terminando em "data: [DONE]") e concatena o texto de
+ * `choices[0].delta.content` de cada chunk conforme chega, em vez de
+ * esperar a resposta inteira de uma vez.
+ *
+ * O timeout NÃO é um teto fixo pra chamada inteira — é de inatividade
+ * (`idleTimeoutMs`, reseta a cada chunk novo, incluindo comentários SSE de
+ * keep-alive do OpenRouter tipo ": OPENROUTER PROCESSING", que não viram
+ * linha `data:` mas ainda contam como atividade). Um `maxTimeoutMs`
+ * absoluto continua existindo como rede de segurança final.
+ *
+ * Linhas `data:` malformadas isoladas são ignoradas (não derrubam o stream
+ * inteiro) — só uma resposta HTTP de erro (`!res.ok`) ou o idle/max timeout
+ * lançam.
+ */
+export async function fetchStreamedTextOrThrow(
+  provider: string,
+  url: string,
+  init: UndiciRequestInit,
+  options: StreamedTextOptions = {}
+): Promise<string> {
+  const idleTimeoutMs = options.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS;
+  const maxTimeoutMs = options.maxTimeoutMs ?? DEFAULT_MAX_TIMEOUT_MS;
+
+  const controller = new AbortController();
+  let idleTimer: ReturnType<typeof setTimeout> = setTimeout(() => controller.abort(), idleTimeoutMs);
+  const resetIdleTimer = () => {
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => controller.abort(), idleTimeoutMs);
+  };
+  const maxTimer = setTimeout(() => controller.abort(), maxTimeoutMs);
+
+  try {
+    const res = await rawFetch(provider, url, init, controller.signal);
+    if (!res.ok) {
+      const bodyText = await res.text().catch(() => "");
+      throw classifyHttpError(res.status, provider, bodyText);
+    }
+    if (!res.body) throw new AiProviderError("unknown", provider, "resposta sem corpo (stream)");
+
+    const reader = res.body.getReader();
+    try {
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let content = "";
+      let doneMarkerSeen = false;
+
+      while (!doneMarkerSeen) {
+        const { value, done: readerDone } = await reader.read();
+        if (readerDone) break;
+        resetIdleTimer(); // chunk novo chegou — reseta a inatividade, mesmo se não virar linha `data:`
+        buffer += decoder.decode(value, { stream: true });
+
+        let newlineIndex: number;
+        while ((newlineIndex = buffer.indexOf("\n")) !== -1) {
+          const line = buffer.slice(0, newlineIndex).trim();
+          buffer = buffer.slice(newlineIndex + 1);
+          if (!line.startsWith("data:")) continue; // linha vazia ou comentário SSE (keep-alive) — ignora
+          const payload = line.slice(5).trim();
+          if (payload === "[DONE]") {
+            doneMarkerSeen = true;
+            break;
+          }
+          try {
+            const parsed = JSON.parse(payload) as OpenAiStreamChunk;
+            const delta = parsed.choices?.[0]?.delta?.content;
+            if (delta) content += delta;
+          } catch {
+            // linha `data:` malformada isolada — ignora e segue o stream.
+          }
+        }
+      }
+
+      return content;
+    } finally {
+      try {
+        await reader.cancel();
+      } catch {
+        // ignora — o reader pode já ter sido consumido até o fim (stream
+        // encerrado naturalmente), sem nada a cancelar.
+      }
+    }
+  } catch (err) {
+    if (err instanceof Error && err.name === "AbortError") {
+      throw new AiProviderError("timeout", provider);
+    }
+    throw err;
+  } finally {
+    clearTimeout(idleTimer);
+    clearTimeout(maxTimer);
+  }
 }
 
 function stripCodeFences(text: string): string {

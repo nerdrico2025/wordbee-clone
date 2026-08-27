@@ -280,6 +280,17 @@ Estado da build do clone pessoal do Wordbee. Atualizado ao final de cada prompt.
 - **Qualidade**: `typecheck`, `lint`, `build` e os 98 testes automatizados seguem passando (instrumentação não muda lógica de negócio, só adiciona `console.log`/`console.error` estruturado e o tipo de retorno de `scheduleLineRun`, mudança aditiva).
 - **Deploy**: enviado ao GitHub (`main`) nesta sessão. O EasyPanel pode estar configurado com deploy automático no push ou exigir redeploy manual pelo painel — não verificado remotamente (sem acesso ao EasyPanel); confirmar lá que o novo commit está de fato rodando antes de reavaliar os logs.
 
+## ✅ Timeout fixo → streaming com idle timeout no OpenRouter + jitter no agendamento (2026-08-27, mesmo dia)
+
+- **Causa raiz confirmada pelo log da rodada anterior**: a maioria das chamadas de texto ao OpenRouter batia exatamente o teto fixo (60s título / 90s artigo) — padrão de chamadas legítimas cortadas por um teto arbitrário, não de falha real do provedor.
+- **`fetchStreamedTextOrThrow`, novo (`packages/shared/src/ai/http.ts`)**: `chatCompletion` (`generateTitles`/`generateArticle`) passou a chamar o OpenRouter com `stream: true` e ler a resposta como SSE, concatenando o texto chunk a chunk. O timeout deixou de ser um teto fixo pra virar um **timeout de inatividade de 20s** (reseta a cada chunk novo, incluindo keep-alives SSE do OpenRouter) com um **teto absoluto de segurança de 5min** por trás, pra nunca ficar preso indefinidamente. Uma chamada que segue recebendo texto aos poucos nunca esbarra no timeout, não importa quanto tempo total leve.
+- **Jitter de ±10%** no próximo agendamento calculado a partir de `intervaloMin` (`apps/worker/src/line-pipeline.ts`) — evita que várias linhas com o mesmo intervalo convirjam pra disparar sempre no mesmo minuto, gerando rajadas simultâneas de chamadas ao mesmo provedor.
+- **`AI_PROVIDER_CONCURRENCY` confirmado ajustável só via env** (sem cache, sem precisar de rebuild) — documentado em `.env.example`/`.env.production.example` como teste A/B (reduzir pra 1-2 temporariamente) pra isolar se timeouts vêm de carga concorrente.
+- **Log `openrouter_call` ganhou o campo `modo: "stream"|"sync"`** pra comparar taxa de timeout antes/depois olhando o mesmo evento.
+- **Item 5 (fallback de modelo configurável) deliberadamente NÃO implementado** — só documentado como ponto de extensão em `DECISIONS.md`, pra ativar depois se pedido.
+- **6 testes de `openrouter.test.ts` reescritos/adicionados**: sucesso via streaming (título/artigo), timeout de inatividade real (idle timeout de 20s sem nenhum chunk), e uma resposta longa com chunks espaçados a cada 15s (135s de tempo total, mais que o teto fixo antigo de 90s) que completa com sucesso — prova direta de que o problema relatado está resolvido.
+- **Qualidade**: `typecheck`, `lint`, `build` e os 99 testes automatizados (98 anteriores + 1 novo — o total líquido de testes de streaming reescritos/adicionados no arquivo compensou o que foi removido) passando.
+
 ## Como rodar localmente
 
 ```bash

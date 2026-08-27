@@ -1,5 +1,5 @@
 import { AI_MODELS } from "./models.js";
-import { fetchJsonOrThrow, fetchWithTimeout, parseJsonArrayResponse, parseJsonObjectResponse } from "./http.js";
+import { fetchJsonOrThrow, fetchStreamedTextOrThrow, fetchWithTimeout, parseJsonArrayResponse, parseJsonObjectResponse } from "./http.js";
 import { AiProviderError, classifyHttpError } from "./errors.js";
 import { buildArticleSystemPrompt, buildTitleSuggestionPrompt } from "../prompts/common.js";
 import { ARTICLE_TYPE_PROMPTS } from "../prompts/article-types/index.js";
@@ -26,32 +26,26 @@ const EXTRA_HEADERS = {
   "X-Title": "Wordbee Clone",
 };
 
-// Geração de artigo completo é naturalmente mais longa que sugestão de
-// título (muito mais tokens de saída) — usa um timeout explícito maior que
-// o padrão de `fetchJsonOrThrow` (ver DECISIONS.md sobre o bug corrigido em
-// 2026-08-25: `generateArticle` via OpenRouter travava indefinidamente
-// porque o timeout não cobria a leitura do corpo da resposta).
-// `generateTitles` continua usando o timeout padrão — mesmo mecanismo
-// (mesma `chatCompletion` → `fetchJsonOrThrow`), só com uma janela maior
-// para a chamada que sabidamente demora mais.
-const ARTICLE_TIMEOUT_MS = 90_000;
-
 type OpenRouterCallTipo = "titulo" | "artigo" | "imagem";
+type OpenRouterCallModo = "stream" | "sync";
 
 /**
  * Log de latência por chamada, mesmo quando ela dá timeout/erro —
  * instrumentação adicionada em 2026-08-27 pra distinguir degradação
  * sustentada do provedor (quase toda chamada batendo o teto do timeout) de
- * algo mais específico (ex.: só chamadas concorrentes demoram). Ver
- * DECISIONS.md.
+ * algo mais específico (ex.: só chamadas concorrentes demoram). Campo
+ * `modo` adicionado depois, na mudança de timeout fixo pra streaming com
+ * idle timeout (mesmo dia) — permite comparar taxa de timeout antes/depois
+ * olhando o mesmo log. Ver DECISIONS.md.
  */
-function logOpenRouterCall(tipo: OpenRouterCallTipo, startedAt: number, err?: unknown): void {
+function logOpenRouterCall(tipo: OpenRouterCallTipo, modo: OpenRouterCallModo, startedAt: number, err?: unknown): void {
   const duracaoMs = Date.now() - startedAt;
   const resultado = !err ? "ok" : err instanceof AiProviderError && err.code === "timeout" ? "timeout" : "erro";
   console.log(
     JSON.stringify({
       evento: "openrouter_call",
       tipo,
+      modo,
       duracaoMs,
       resultado,
       ...(err ? { detalhe: err instanceof Error ? err.message : String(err) } : {}),
@@ -59,34 +53,40 @@ function logOpenRouterCall(tipo: OpenRouterCallTipo, startedAt: number, err?: un
   );
 }
 
-async function chatCompletion(apiKey: string, systemPrompt: string, userPrompt: string, tipo: "titulo" | "artigo", timeoutMs?: number): Promise<string> {
+/**
+ * `stream: true` + `fetchStreamedTextOrThrow`, não `fetchJsonOrThrow` com
+ * teto fixo: um teto fixo (60s/90s, removido nesta mudança) matava chamadas
+ * que estavam progredindo normalmente, só demorando mais que o teto pra
+ * terminar um artigo longo — o padrão observado em produção era a maioria
+ * das chamadas batendo exatamente o teto. O timeout de inatividade
+ * (`fetchStreamedTextOrThrow`, `packages/shared/src/ai/http.ts`) só aborta
+ * se ficar `idleTimeoutMs` sem receber nenhum chunk novo — uma chamada que
+ * segue recebendo texto aos poucos nunca esbarra nele, não importa quanto
+ * tempo total leve. Ver DECISIONS.md.
+ */
+async function chatCompletion(apiKey: string, systemPrompt: string, userPrompt: string, tipo: "titulo" | "artigo"): Promise<string> {
   const startedAt = Date.now();
   try {
-    const json = (await fetchJsonOrThrow(
-      PROVIDER,
-      `${BASE_URL}/chat/completions`,
-      {
-        method: "POST",
-        headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json", ...EXTRA_HEADERS },
-        body: JSON.stringify({
-          model: AI_MODELS.openrouter.text,
-          messages: [
-            { role: "system", content: systemPrompt },
-            { role: "user", content: userPrompt },
-          ],
-          temperature: 0.8,
-        }),
-      },
-      timeoutMs
-    )) as { choices?: Array<{ message?: { content?: string } }> };
+    const content = await fetchStreamedTextOrThrow(PROVIDER, `${BASE_URL}/chat/completions`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json", ...EXTRA_HEADERS },
+      body: JSON.stringify({
+        model: AI_MODELS.openrouter.text,
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt },
+        ],
+        temperature: 0.8,
+        stream: true,
+      }),
+    });
 
-    const content = json.choices?.[0]?.message?.content;
     if (!content) throw new AiProviderError("unknown", PROVIDER, "resposta vazia do modelo");
 
-    logOpenRouterCall(tipo, startedAt);
+    logOpenRouterCall(tipo, "stream", startedAt);
     return content;
   } catch (err) {
-    logOpenRouterCall(tipo, startedAt, err);
+    logOpenRouterCall(tipo, "stream", startedAt, err);
     throw err;
   }
 }
@@ -109,7 +109,7 @@ export function createOpenRouterTextProvider(apiKey: string): TextProvider {
 - "metaTitle": título otimizado para SEO, até 60 caracteres
 
 Não use markdown nem texto fora do JSON.`;
-      const content = await chatCompletion(apiKey, systemPrompt, userPrompt, "artigo", ARTICLE_TIMEOUT_MS);
+      const content = await chatCompletion(apiKey, systemPrompt, userPrompt, "artigo");
       const parsed = parseJsonObjectResponse<{ contentHtml: string; excerpt: string; metaTitle: string }>(content, PROVIDER);
       return {
         contentHtml: parsed.contentHtml,
@@ -159,10 +159,10 @@ async function requestImage(apiKey: string, body: Record<string, unknown>): Prom
     const item = json.data?.[0];
     if (!item?.b64_json) throw new AiProviderError("unknown", PROVIDER, "resposta de imagem vazia");
 
-    logOpenRouterCall("imagem", startedAt);
+    logOpenRouterCall("imagem", "sync", startedAt);
     return { base64: item.b64_json, mimeType: item.media_type ?? "image/png" };
   } catch (err) {
-    logOpenRouterCall("imagem", startedAt, err);
+    logOpenRouterCall("imagem", "sync", startedAt, err);
     throw err;
   }
 }
