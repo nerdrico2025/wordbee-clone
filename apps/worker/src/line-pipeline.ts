@@ -7,7 +7,6 @@ import {
   createImageProvider,
   uploadMedia,
   createPost,
-  scheduleLineRun,
   getStorageDriver,
   AiProviderError,
   WordPressError,
@@ -53,11 +52,46 @@ export type LogFn = (log: LineRunLog) => void;
 
 /**
  * Executa um "tick" de uma linha de produção: consome/gera título, gera
- * conteúdo+imagem, publica no WordPress, atualiza contadores e agenda a
- * próxima execução. Nunca lança — todo erro é tratado e registrado; do
- * ponto de vista do BullMQ o job sempre "completa".
+ * conteúdo+imagem, publica no WordPress e atualiza contadores/nextRunAt.
+ * Nunca lança — todo erro é tratado e registrado; do ponto de vista do
+ * BullMQ o job sempre "completa".
+ *
+ * Importante: esta função NUNCA chama scheduleLineRun. O job atual (jobId =
+ * lineId) ainda está "active" na fila enquanto ela roda, e o BullMQ ignora
+ * silenciosamente qualquer add com um jobId já existente em qualquer estado
+ * (ver docs.bullmq.io/guide/jobs/job-ids) — chamar scheduleLineRun aqui
+ * dentro faria o reagendamento da próxima execução falhar sem erro nenhum.
+ * O reagendamento real acontece no handler "completed"/"failed" do worker
+ * (production-line-worker.ts), depois que o job atual já foi removido da
+ * fila e o jobId está livre. Ver DECISIONS.md.
  */
 export async function runProductionLine(redis: Redis, lineId: string, log: LogFn = () => undefined): Promise<void> {
+  try {
+    await runProductionLineInner(redis, lineId, log);
+  } catch (err) {
+    // Rede de segurança final: nada abaixo desta função deveria lançar sem
+    // ser tratado, mas se algo inesperado escapar (erro do Postgres,
+    // exceção em getDecryptedApiKey/getSiteCredentials, bug futuro), o job
+    // NUNCA pode virar "failed" no BullMQ — um job failed com jobId=lineId
+    // fica ocupando esse jobId (removeOnFail o mantém no Redis), e tanto
+    // cancelLineRun quanto o reagendamento seguinte ficariam bloqueados por
+    // ele. Ver DECISIONS.md ("cancelLineRun/syncActiveLines só tratavam
+    // waiting/delayed").
+    const message = toUserMessage(err);
+    console.error(`[line-pipeline] erro inesperado não tratado na linha ${lineId}:`, err);
+    log({ lineId, event: "erro_inesperado", detail: message });
+    try {
+      const line = await prisma.productionLine.findUnique({ where: { id: lineId } });
+      if (line && line.status === "ATIVA") {
+        await handleDeterministicFailure(lineId, line.consecutiveFailures, message, line.intervaloMin);
+      }
+    } catch (dbErr) {
+      console.error(`[line-pipeline] falha ao registrar erro inesperado da linha ${lineId} no banco:`, dbErr);
+    }
+  }
+}
+
+async function runProductionLineInner(redis: Redis, lineId: string, log: LogFn): Promise<void> {
   const line = await prisma.productionLine.findUnique({ where: { id: lineId } });
   if (!line) {
     log({ lineId, event: "linha_nao_encontrada" });
@@ -123,7 +157,10 @@ export async function runProductionLine(redis: Redis, lineId: string, log: LogFn
   const existingArticle = await prisma.article.findUnique({ where: { idempotencyKey } });
   if (existingArticle && existingArticle.status !== "FALHA") {
     log({ lineId, event: "idempotencia_ja_publicado", detail: existingArticle.id });
-    await scheduleNext(line.id, line.intervaloMin);
+    await prisma.productionLine.update({
+      where: { id: lineId },
+      data: { nextRunAt: new Date(Date.now() + line.intervaloMin * 60_000) },
+    });
     return;
   }
 
@@ -273,7 +310,6 @@ export async function runProductionLine(redis: Redis, lineId: string, log: LogFn
     await replenishTitleQueue(redis, line.id, textProvider, line.iaTexto, line.tipoArtigo as ArticleTypeSlug, line.temas, line.intervaloMin).catch((err) =>
       log({ lineId, event: "falha_reposicao_fila", detail: toUserMessage(err) })
     );
-    await scheduleLineRun(lineId, line.intervaloMin * 60_000);
   }
 }
 
@@ -292,10 +328,6 @@ async function handleDeterministicFailure(lineId: string, currentFailures: numbe
         : { nextRunAt }),
     },
   });
-
-  if (!shouldPause) {
-    await scheduleLineRun(lineId, intervaloMin * 60_000);
-  }
 }
 
 async function handleRateLimit(lineId: string, behavior: string): Promise<void> {
@@ -309,13 +341,6 @@ async function handleRateLimit(lineId: string, behavior: string): Promise<void> 
   // ADIAR: não conta como falha, só empurra o próximo disparo para mais tarde.
   const nextRunAt = new Date(Date.now() + RATE_LIMIT_DEFER_MS);
   await prisma.productionLine.update({ where: { id: lineId }, data: { nextRunAt, lastRunAt: new Date() } });
-  await scheduleLineRun(lineId, RATE_LIMIT_DEFER_MS);
-}
-
-async function scheduleNext(lineId: string, intervaloMin: number): Promise<void> {
-  const nextRunAt = new Date(Date.now() + intervaloMin * 60_000);
-  await prisma.productionLine.update({ where: { id: lineId }, data: { nextRunAt } });
-  await scheduleLineRun(lineId, intervaloMin * 60_000);
 }
 
 async function getUsedTitles(lineId: string): Promise<string[]> {

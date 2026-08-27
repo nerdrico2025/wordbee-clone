@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { Worker, type Job } from "bullmq";
 import type { Redis } from "ioredis";
 import { prisma } from "@wordbee/db";
@@ -13,6 +14,80 @@ import { runProductionLine } from "./line-pipeline.js";
 
 const WORKER_CONCURRENCY = Number(process.env.WORKER_CONCURRENCY ?? "5");
 
+/**
+ * Id único por processo, gerado uma vez na carga do módulo e incluído em
+ * todo log estruturado deste arquivo. Instrumentação adicionada em
+ * 2026-08-27 especificamente para responder "há mais de uma instância do
+ * worker rodando ao mesmo tempo (ex.: 2 réplicas no EasyPanel)?" — se dois
+ * `workerId` diferentes aparecerem intercalados no mesmo stream de log, é
+ * prova direta de múltiplas instâncias competindo pela mesma fila. Ver
+ * DECISIONS.md.
+ */
+const WORKER_INSTANCE_ID = randomUUID();
+console.log(JSON.stringify({ evento: "worker_instancia_iniciada", workerId: WORKER_INSTANCE_ID, pid: process.pid, iniciadoEm: new Date().toISOString() }));
+
+/**
+ * Reagenda a próxima execução da linha na fila, se ainda fizer sentido.
+ *
+ * Só deve ser chamada depois que o job atual (jobId = lineId) já saiu da
+ * fila — nunca de dentro do processor, enquanto o job ainda está "active"
+ * (ver comentário em line-pipeline.ts e DECISIONS.md). Os handlers
+ * "completed"/"failed" do BullMQ satisfazem essa condição: com
+ * removeOnComplete/removeOnFail, o job já foi removido antes do evento
+ * disparar, então o jobId está livre para o próximo scheduleLineRun.
+ *
+ * Loga explicitamente ANTES e DEPOIS de chamar scheduleLineRun — se o log
+ * "antes" nunca aparecer entre um "tick_concluido" e o próximo restart, o
+ * handler completed/failed não está sendo disparado (bug de registro do
+ * listener, ou Worker duplicado). Se "antes" aparecer mas "depois" não,
+ * scheduleLineRun travou ou lançou. Se "depois" aparecer com sucesso,
+ * conferir o log "queue_add" (emitido dentro de scheduleLineRun, em
+ * packages/shared/src/queue/index.ts) para confirmar que o BullMQ de fato
+ * criou o job novo — essa é a fonte de verdade final.
+ */
+async function rescheduleIfNeeded(lineId: string, origem: "completed" | "failed"): Promise<void> {
+  const line = await prisma.productionLine.findUnique({ where: { id: lineId } });
+  if (!line || line.status !== "ATIVA" || !line.nextRunAt) {
+    console.log(
+      JSON.stringify({
+        evento: "reschedule_pos_completed_pulado",
+        origem,
+        linha: lineId,
+        workerId: WORKER_INSTANCE_ID,
+        motivo: !line ? "linha_nao_encontrada" : line.status !== "ATIVA" ? `status_${line.status}` : "nextRunAt_nulo",
+      })
+    );
+    return;
+  }
+
+  const delayMs = Math.max(0, line.nextRunAt.getTime() - Date.now());
+  console.log(
+    JSON.stringify({
+      evento: "reschedule_pos_completed",
+      fase: "antes",
+      origem,
+      linha: lineId,
+      workerId: WORKER_INSTANCE_ID,
+      nextRunAt: line.nextRunAt.toISOString(),
+      delayMs,
+    })
+  );
+
+  const job = await scheduleLineRun(lineId, delayMs);
+
+  console.log(
+    JSON.stringify({
+      evento: "reschedule_pos_completed",
+      fase: "depois",
+      origem,
+      linha: lineId,
+      workerId: WORKER_INSTANCE_ID,
+      jobIdCriado: job.id,
+      delayMs,
+    })
+  );
+}
+
 export function startProductionLineWorker(connection: Redis): Worker<ProductionLineJobData> {
   const worker = new Worker<ProductionLineJobData>(
     PRODUCTION_LINE_QUEUE_NAME,
@@ -22,7 +97,7 @@ export function startProductionLineWorker(connection: Redis): Worker<ProductionL
 
       const locked = await acquireLineLock(connection, lineId);
       if (!locked) {
-        console.log(JSON.stringify({ linha: lineId, evento: "lock_ocupado", mensagem: "já está em execução em outro processo" }));
+        console.log(JSON.stringify({ linha: lineId, evento: "lock_ocupado", workerId: WORKER_INSTANCE_ID, mensagem: "já está em execução em outro processo" }));
         return;
       }
 
@@ -30,7 +105,7 @@ export function startProductionLineWorker(connection: Redis): Worker<ProductionL
       try {
         await runProductionLine(connection, lineId, ({ event, detail }) => {
           lastEvent = event;
-          console.log(JSON.stringify({ linha: lineId, evento: event, detalhe: detail }));
+          console.log(JSON.stringify({ linha: lineId, evento: event, detalhe: detail, workerId: WORKER_INSTANCE_ID }));
           if (event === "publicado") {
             recordLastSuccess(connection).catch((err) => console.error("[worker] falha ao gravar last_success:", err));
           }
@@ -38,24 +113,50 @@ export function startProductionLineWorker(connection: Redis): Worker<ProductionL
       } finally {
         await releaseLineLock(connection, lineId);
         const duracaoMs = Date.now() - startedAt;
-        console.log(JSON.stringify({ linha: lineId, evento: "tick_concluido", ultimoEvento: lastEvent, duracaoMs }));
+        console.log(JSON.stringify({ linha: lineId, evento: "tick_concluido", ultimoEvento: lastEvent, duracaoMs, workerId: WORKER_INSTANCE_ID }));
       }
     },
     { connection, concurrency: WORKER_CONCURRENCY }
   );
 
+  worker.on("completed", (job) => {
+    if (!job) return;
+    rescheduleIfNeeded(job.data.lineId, "completed").catch((err) =>
+      console.error(`[worker] falha ao reagendar linha ${job.data.lineId} após completed:`, err)
+    );
+  });
+
   worker.on("failed", (job, err) => {
     console.error(`[worker] job da linha ${job?.data.lineId} falhou inesperadamente:`, err);
+    if (!job) return;
+    // Rede de segurança: hoje runProductionLine trata todo erro internamente
+    // e sempre "completa", mas se algo escapar e o job cair aqui, ainda
+    // assim garantimos que a linha não fique órfã na fila.
+    rescheduleIfNeeded(job.data.lineId, "failed").catch((rescheduleErr) =>
+      console.error(`[worker] falha ao reagendar linha ${job.data.lineId} após failed:`, rescheduleErr)
+    );
   });
 
   return worker;
 }
 
+// Únicos estados em que um job com jobId=lineId realmente cobre a próxima
+// execução da linha. Qualquer outro estado (completed, failed, paused,
+// unknown, ...) é tratado como job morto — allow-list deliberada, não
+// deny-list, para não presumir "vivo" por padrão num estado desconhecido.
+const ALIVE_JOB_STATES = new Set(["waiting", "delayed", "active"]);
+
 /**
  * Garante que toda linha ATIVA tenha um job agendado na fila. Necessário
  * porque, embora jobs delayed sobrevivam a restart do worker (persistidos
- * no Redis), uma linha pode ficar "órfã" se o Redis foi limpo ou se ela
- * foi ativada enquanto o worker estava fora do ar.
+ * no Redis), uma linha pode ficar "órfã" se o Redis foi limpo, se ela foi
+ * ativada enquanto o worker estava fora do ar, ou se o job anterior morreu
+ * num estado "failed"/"completed" que não foi limpo (jobId=lineId ainda
+ * ocupado — ver DECISIONS.md). Por isso não basta checar se existe ALGUM
+ * job com esse jobId: precisa checar o ESTADO dele. Um job "waiting"/
+ * "delayed"/"active" significa que a linha já está coberta de verdade — só
+ * esses estados fazem `continue`. Qualquer outro estado é um job morto:
+ * `scheduleLineRun` (via `cancelLineRun`) remove e recria.
  */
 export async function syncActiveLines(): Promise<void> {
   const queue = getProductionLineQueue();
@@ -63,10 +164,65 @@ export async function syncActiveLines(): Promise<void> {
 
   for (const line of activeLines) {
     const existingJob = await queue.getJob(line.id);
-    if (existingJob) continue;
+    if (existingJob) {
+      const state = await existingJob.getState();
+      console.log(
+        JSON.stringify({ evento: "sync_job_existente", linha: line.id, nome: line.nome, workerId: WORKER_INSTANCE_ID, estado: state })
+      );
+      if (ALIVE_JOB_STATES.has(state)) continue;
+      console.log(
+        JSON.stringify({ evento: "sync_job_morto", linha: line.id, nome: line.nome, workerId: WORKER_INSTANCE_ID, estado: state })
+      );
+    }
 
     const delayMs = line.nextRunAt ? Math.max(0, line.nextRunAt.getTime() - Date.now()) : 0;
-    await scheduleLineRun(line.id, delayMs);
-    console.log(`[worker] linha ${line.id} (${line.nome}) reagendada após sincronização de startup.`);
+    const job = await scheduleLineRun(line.id, delayMs);
+    console.log(
+      JSON.stringify({
+        evento: "sync_reagendada",
+        linha: line.id,
+        nome: line.nome,
+        workerId: WORKER_INSTANCE_ID,
+        jobIdCriado: job.id,
+        delayMs,
+      })
+    );
   }
+}
+
+const HEARTBEAT_LOG_INTERVAL_MS = 5 * 60_000;
+
+/**
+ * Log periódico de saúde do processo (distinto do heartbeat gravado no
+ * Redis por `recordHeartbeat`, usado só pelo badge do Dashboard). Este é
+ * pensado pra ser lido diretamente no stream de log do EasyPanel: se ele
+ * parar de aparecer, o processo morreu (ou travou) sem reiniciar sozinho —
+ * sinal de que falta configurar restart automático na infra, não um bug de
+ * código. Instrumentação adicionada em 2026-08-27 (ver DECISIONS.md).
+ */
+export function startHeartbeatLog(): NodeJS.Timeout {
+  const logOnce = async () => {
+    try {
+      const queue = getProductionLineQueue();
+      const [linhasAtivas, jobsNaFila] = await Promise.all([
+        prisma.productionLine.count({ where: { status: "ATIVA" } }),
+        queue.getJobCounts(),
+      ]);
+      console.log(
+        JSON.stringify({
+          evento: "heartbeat",
+          workerId: WORKER_INSTANCE_ID,
+          pid: process.pid,
+          timestamp: new Date().toISOString(),
+          linhasAtivas,
+          jobsNaFila,
+        })
+      );
+    } catch (err) {
+      console.error("[worker] falha ao gravar heartbeat de log:", err);
+    }
+  };
+
+  void logOnce();
+  return setInterval(logOnce, HEARTBEAT_LOG_INTERVAL_MS);
 }

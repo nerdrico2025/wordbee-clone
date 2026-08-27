@@ -1,7 +1,7 @@
 import { prisma } from "@wordbee/db";
 import { closeProductionLineQueue, recordHeartbeat } from "@wordbee/shared";
 import { createRedisConnection } from "./redis.js";
-import { startProductionLineWorker, syncActiveLines } from "./production-line-worker.js";
+import { startProductionLineWorker, syncActiveLines, startHeartbeatLog } from "./production-line-worker.js";
 
 const HEARTBEAT_INTERVAL_MS = 30_000;
 
@@ -24,9 +24,12 @@ async function main() {
   const bullWorker = startProductionLineWorker(redis);
   console.log("[worker] Processador de Linhas de Produção pronto.");
 
+  const logHeartbeatTimer = startHeartbeatLog();
+
   const shutdown = async () => {
     console.log("[worker] Encerrando...");
     clearInterval(heartbeatTimer);
+    clearInterval(logHeartbeatTimer);
     await bullWorker.close();
     await closeProductionLineQueue();
     await redis.quit();

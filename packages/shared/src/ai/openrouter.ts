@@ -36,28 +36,59 @@ const EXTRA_HEADERS = {
 // para a chamada que sabidamente demora mais.
 const ARTICLE_TIMEOUT_MS = 90_000;
 
-async function chatCompletion(apiKey: string, systemPrompt: string, userPrompt: string, timeoutMs?: number): Promise<string> {
-  const json = (await fetchJsonOrThrow(
-    PROVIDER,
-    `${BASE_URL}/chat/completions`,
-    {
-      method: "POST",
-      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json", ...EXTRA_HEADERS },
-      body: JSON.stringify({
-        model: AI_MODELS.openrouter.text,
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userPrompt },
-        ],
-        temperature: 0.8,
-      }),
-    },
-    timeoutMs
-  )) as { choices?: Array<{ message?: { content?: string } }> };
+type OpenRouterCallTipo = "titulo" | "artigo" | "imagem";
 
-  const content = json.choices?.[0]?.message?.content;
-  if (!content) throw new AiProviderError("unknown", PROVIDER, "resposta vazia do modelo");
-  return content;
+/**
+ * Log de latência por chamada, mesmo quando ela dá timeout/erro —
+ * instrumentação adicionada em 2026-08-27 pra distinguir degradação
+ * sustentada do provedor (quase toda chamada batendo o teto do timeout) de
+ * algo mais específico (ex.: só chamadas concorrentes demoram). Ver
+ * DECISIONS.md.
+ */
+function logOpenRouterCall(tipo: OpenRouterCallTipo, startedAt: number, err?: unknown): void {
+  const duracaoMs = Date.now() - startedAt;
+  const resultado = !err ? "ok" : err instanceof AiProviderError && err.code === "timeout" ? "timeout" : "erro";
+  console.log(
+    JSON.stringify({
+      evento: "openrouter_call",
+      tipo,
+      duracaoMs,
+      resultado,
+      ...(err ? { detalhe: err instanceof Error ? err.message : String(err) } : {}),
+    })
+  );
+}
+
+async function chatCompletion(apiKey: string, systemPrompt: string, userPrompt: string, tipo: "titulo" | "artigo", timeoutMs?: number): Promise<string> {
+  const startedAt = Date.now();
+  try {
+    const json = (await fetchJsonOrThrow(
+      PROVIDER,
+      `${BASE_URL}/chat/completions`,
+      {
+        method: "POST",
+        headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json", ...EXTRA_HEADERS },
+        body: JSON.stringify({
+          model: AI_MODELS.openrouter.text,
+          messages: [
+            { role: "system", content: systemPrompt },
+            { role: "user", content: userPrompt },
+          ],
+          temperature: 0.8,
+        }),
+      },
+      timeoutMs
+    )) as { choices?: Array<{ message?: { content?: string } }> };
+
+    const content = json.choices?.[0]?.message?.content;
+    if (!content) throw new AiProviderError("unknown", PROVIDER, "resposta vazia do modelo");
+
+    logOpenRouterCall(tipo, startedAt);
+    return content;
+  } catch (err) {
+    logOpenRouterCall(tipo, startedAt, err);
+    throw err;
+  }
 }
 
 export function createOpenRouterTextProvider(apiKey: string): TextProvider {
@@ -65,7 +96,7 @@ export function createOpenRouterTextProvider(apiKey: string): TextProvider {
     async generateTitles({ tipo, tema, quantidade = 5, titulosExistentes }: GenerateTitlesInput) {
       const config = ARTICLE_TYPE_PROMPTS[tipo];
       const prompt = buildTitleSuggestionPrompt({ tipoLabel: config.label, tema, quantidade, titulosExistentes });
-      const content = await chatCompletion(apiKey, "Você é um especialista em títulos otimizados para SEO.", prompt);
+      const content = await chatCompletion(apiKey, "Você é um especialista em títulos otimizados para SEO.", prompt, "titulo");
       return parseJsonArrayResponse(content, PROVIDER);
     },
 
@@ -78,7 +109,7 @@ export function createOpenRouterTextProvider(apiKey: string): TextProvider {
 - "metaTitle": título otimizado para SEO, até 60 caracteres
 
 Não use markdown nem texto fora do JSON.`;
-      const content = await chatCompletion(apiKey, systemPrompt, userPrompt, ARTICLE_TIMEOUT_MS);
+      const content = await chatCompletion(apiKey, systemPrompt, userPrompt, "artigo", ARTICLE_TIMEOUT_MS);
       const parsed = parseJsonObjectResponse<{ contentHtml: string; excerpt: string; metaTitle: string }>(content, PROVIDER);
       return {
         contentHtml: parsed.contentHtml,
@@ -117,15 +148,23 @@ function isUnsupportedReferencesError(err: unknown): boolean {
 }
 
 async function requestImage(apiKey: string, body: Record<string, unknown>): Promise<GeneratedImage> {
-  const json = (await fetchJsonOrThrow(PROVIDER, `${BASE_URL}/images`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json", ...EXTRA_HEADERS },
-    body: JSON.stringify(body),
-  })) as OpenRouterImageResponse;
+  const startedAt = Date.now();
+  try {
+    const json = (await fetchJsonOrThrow(PROVIDER, `${BASE_URL}/images`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json", ...EXTRA_HEADERS },
+      body: JSON.stringify(body),
+    })) as OpenRouterImageResponse;
 
-  const item = json.data?.[0];
-  if (!item?.b64_json) throw new AiProviderError("unknown", PROVIDER, "resposta de imagem vazia");
-  return { base64: item.b64_json, mimeType: item.media_type ?? "image/png" };
+    const item = json.data?.[0];
+    if (!item?.b64_json) throw new AiProviderError("unknown", PROVIDER, "resposta de imagem vazia");
+
+    logOpenRouterCall("imagem", startedAt);
+    return { base64: item.b64_json, mimeType: item.media_type ?? "image/png" };
+  } catch (err) {
+    logOpenRouterCall("imagem", startedAt, err);
+    throw err;
+  }
 }
 
 /**
