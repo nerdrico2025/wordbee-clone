@@ -3,7 +3,7 @@
 Este projeto tem **dois processos**: o app **web** (Next.js, pode rodar na Vercel como serverless) e o **worker** (BullMQ, processo *always-on* que executa as Linhas de Produção). A Vercel **não suporta processos de longa duração** — funções serverless são efêmeras e não conseguem manter um `Worker` do BullMQ escutando a fila continuamente. Por isso:
 
 - A **Vercel roda só o app web** (login, telas, geração unitária "Criar Artigo", API routes).
-- O **worker precisa rodar em outro lugar**, um serviço always-on: **Railway** ou **Fly.io** são as opções mais simples (o projeto já tem `apps/worker/Dockerfile` pronto para build direto nessas plataformas), ou um **VPS único** com Docker Compose (como descrito no `README.md`). Sem o worker rodando, as Linhas de Produção ficam paradas — só a geração unitária continua funcionando pela Vercel.
+- O **worker precisa rodar em outro lugar**, um serviço always-on. **Ambiente atual de produção: EasyPanel** (Docker, num VPS próprio) — ver README.md ("Deploy no EasyPanel"). Fly.io ou um VPS "cru" com Docker Compose (`docker-compose.prod.yml`, também no README) funcionam do mesmo jeito, já que o worker é só um container Docker comum. Sem o worker rodando, as Linhas de Produção ficam paradas — só a geração unitária continua funcionando pela Vercel.
 
 > ⚠️ **Nunca defina `NODE_ENV`** em nenhuma dessas plataformas — a Vercel e o Next.js já definem o valor certo sozinhos; sobrescrever quebra o build (bug documentado em `DECISIONS.md`/`PROGRESS.md`).
 
@@ -17,8 +17,8 @@ Este projeto tem **dois processos**: o app **web** (Next.js, pode rodar na Verce
 
 | Variável | Para que serve | Obrigatória? | Exemplo / como obter |
 |---|---|---|---|
-| `DATABASE_URL` | Conexão com o Postgres (Prisma) | **Obrigatória** | `postgresql://usuario:senha@host:5432/banco?sslmode=require` — string de conexão do Supabase/Neon/Railway |
-| `REDIS_URL` | Conexão com o Redis (usado pelo web só para rate limit de login e para agendar/cancelar jobs do worker) | **Obrigatória** | `redis://default:senha@host:6379` — string de conexão **TCP/Redis** do Upstash ou Railway (não a REST URL do Upstash — o BullMQ precisa do protocolo Redis nativo) |
+| `DATABASE_URL` | Conexão com o Postgres (Prisma) | **Obrigatória** | `postgresql://usuario:senha@host:5432/banco?sslmode=require` — em produção, a connection string do **Neon** (ambiente atual). **Precisa ser idêntica à do worker no EasyPanel.** |
+| `REDIS_URL` | Conexão com o Redis (usado pelo web só para rate limit de login e para agendar/cancelar jobs do worker) | **Obrigatória** | string de conexão **TCP/Redis** — em produção, a connection string do **Upstash** (ambiente atual; não a REST URL — o BullMQ precisa do protocolo Redis nativo). **Precisa ser idêntica à do worker no EasyPanel** — se divergir, o worker nunca vê os jobs que o web agenda (bug real já visto em produção, ver DECISIONS.md "Redis único via Upstash"). |
 | `SESSION_SECRET` | Assina o cookie de sessão (JWT HS256) | **Obrigatória** | Gerar com `openssl rand -base64 48` |
 | `ENCRYPTION_KEY` | Chave-mestra AES-256-GCM para criptografar as chaves de API e senhas de aplicação WordPress salvas no banco | **Obrigatória** | Gerar com `openssl rand -base64 32` — **guarde em local seguro**, se perder essa chave os dados criptografados ficam ilegíveis |
 | `SESSION_TTL_HOURS` | Duração da sessão de login, em horas | Opcional (padrão `168` = 7 dias) | `168` |
@@ -44,30 +44,32 @@ Este projeto tem **dois processos**: o app **web** (Next.js, pode rodar na Verce
 
 ---
 
-## (b) Variáveis para o worker (fora da Vercel — Railway/Fly.io/VPS)
+## (b) Variáveis para o worker (fora da Vercel — EasyPanel, ambiente atual)
 
 | Variável | Para que serve | Obrigatória? | Exemplo / como obter |
 |---|---|---|---|
 | `DATABASE_URL` | Mesmo Postgres do app web | **Obrigatória** | **A mesma string de conexão usada na Vercel** |
 | `REDIS_URL` | Mesmo Redis do app web (fila BullMQ) | **Obrigatória** | **A mesma string de conexão (TCP) usada na Vercel** |
 | `ENCRYPTION_KEY` | Descriptografa as chaves de API e senhas de aplicação para chamar IA/WordPress | **Obrigatória** | **Precisa ser exatamente a mesma chave usada na Vercel** — se divergir, o worker não consegue ler nada que o web salvou |
-| `STORAGE_DRIVER` / `STORAGE_LOCAL_PATH` | Onde ler as imagens de referência das linhas | Opcional | Se usar `local`, aponte para um disco persistente do próprio host do worker (ex.: volume do Railway/Fly) — **não** o disco da Vercel |
+| `STORAGE_DRIVER` / `STORAGE_LOCAL_PATH` | Onde ler as imagens de referência das linhas | Opcional | Se usar `local`, aponte para um disco persistente do próprio host do worker (ex.: volume do EasyPanel) — **não** o disco da Vercel |
 | `AI_PROVIDER_CONCURRENCY` | Chamadas simultâneas de IA por provedor entre todas as linhas ativas | Opcional (padrão `3`) | `3` |
 | `WORKER_CONCURRENCY` | Quantas linhas o worker processa em paralelo | Opcional (padrão `5`) | `5` |
 | `OPENAI_TEXT_MODEL` … `OPENROUTER_IMAGE_DEFAULT_MODEL` | Mesmos overrides de modelo do app web | Opcional | Mantenha **iguais** aos da Vercel para consistência |
 
 **Não precisa no worker:** `SESSION_SECRET`, `SESSION_TTL_HOURS`, `SESSION_COOKIE_NAME`, `LOGIN_RATE_LIMIT_*` (o worker não lida com login/sessão) e `ADMIN_*` (só usado pelo seed).
 
-O worker tem `apps/worker/Dockerfile` pronto — no Railway/Fly.io, aponte o build para esse Dockerfile (contexto = raiz do repositório) e configure as variáveis acima no painel do serviço.
+O worker tem `apps/worker/Dockerfile` pronto — no EasyPanel, aponte o build para esse Dockerfile (contexto = raiz do repositório) e configure as variáveis acima no painel do serviço "App". Passo a passo completo em `README.md` ("Deploy no EasyPanel").
 
 ---
 
 ## Postgres e Redis gerenciados
 
-Este projeto **não depende de infraestrutura da Vercel** para banco de dados ou fila — é BYOK e de uso pessoal, então você mesmo escolhe onde hospedar:
+Este projeto **não depende de infraestrutura da Vercel nem do EasyPanel** para banco de dados ou fila — é BYOK e de uso pessoal. **Ambiente atual de produção:**
 
-- **Postgres**: qualquer provedor gerenciado acessível publicamente (com TLS) — **Supabase**, **Neon** ou o Postgres do **Railway** são os mais simples de configurar. Precisa ser alcançável tanto pela Vercel (web) quanto pelo host do worker.
-- **Redis**: precisa suportar o **protocolo Redis padrão (TCP)**, não só uma API REST — **Upstash** (usando a connection string `redis://`, não a REST URL) ou o Redis do **Railway** funcionam bem. Também precisa ser alcançável pelos dois lados.
+- **Postgres**: **Neon** (gerenciado, plano gratuito, endpoint público com TLS). Precisa ser alcançável tanto pela Vercel (web) quanto pelo worker (EasyPanel) — a mesma `DATABASE_URL` nos dois.
+- **Redis**: **Upstash** (gerenciado, plano gratuito, endpoint público com TLS, protocolo Redis nativo — não a REST URL). Mesma lógica: a mesma `REDIS_URL` na Vercel e no worker. **Nunca** o Redis interno de um serviço do EasyPanel — a Vercel roda com IP de saída dinâmico e não alcança redes privadas de forma confiável (ver aviso completo em README.md, "Deploy no EasyPanel").
+
+Qualquer outro provedor gerenciado com endpoint público e TLS (Supabase, outro Redis compatível) funciona do mesmo jeito — Neon e Upstash são só o que está em uso hoje.
 
 Depois de provisionar os dois, rode a migração e o seed uma vez (da sua máquina, com `DATABASE_URL` apontando para o Postgres de produção):
 

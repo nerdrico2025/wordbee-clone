@@ -1,5 +1,6 @@
 import { Queue, type Job } from "bullmq";
 import { Redis } from "ioredis";
+import { instrumentRedisCommandCounts } from "../redis-metrics.js";
 
 export const PRODUCTION_LINE_QUEUE_NAME = "production-line-run";
 
@@ -14,7 +15,11 @@ function getConnection(): Redis {
   if (!connection) {
     const url = process.env.REDIS_URL;
     if (!url) throw new Error("REDIS_URL não configurada.");
-    connection = new Redis(url, { maxRetriesPerRequest: null });
+    // Instrumentado para contagem de comandos (ver `redis-metrics.ts`) — é um
+    // contador em memória por processo, sem custo de Redis; inofensivo tanto
+    // no worker (que loga o snapshot periodicamente) quanto no web (onde
+    // ninguém lê o snapshot, mas o overhead é irrelevante).
+    connection = instrumentRedisCommandCounts(new Redis(url, { maxRetriesPerRequest: null }));
   }
   return connection;
 }
@@ -48,6 +53,14 @@ export function getProductionLineQueue(): Queue<ProductionLineJobData> {
  * Redis, não só que a chamada não lançou. Instrumentação adicionada durante
  * a investigação de 2026-08-27 (linhas ficando sem job vivo entre execuções
  * mesmo com o fix de reagendamento aplicado) — ver DECISIONS.md.
+ *
+ * Não faz mais uma leitura extra de `job.getState()` só para confirmar o
+ * estado no log: era 1 comando Redis a mais em TODO scheduleLineRun (ou
+ * seja, em todo tick de toda linha ativa), adicionado para depurar o bug de
+ * 2026-08-27 que já está corrigido e coberto por
+ * `production-line-worker.integration.test.ts`. `job.id`/`job.opts.delay`
+ * já vêm de graça na resposta do próprio `q.add()`, sem round-trip
+ * adicional — ver DECISIONS.md "redução de comandos Redis" (2026-08-29).
  */
 export async function scheduleLineRun(lineId: string, delayMs: number): Promise<Job<ProductionLineJobData>> {
   const q = getProductionLineQueue();
@@ -57,10 +70,6 @@ export async function scheduleLineRun(lineId: string, delayMs: number): Promise<
     { lineId },
     { jobId: lineId, delay: Math.max(0, delayMs), removeOnComplete: true, removeOnFail: 1000 }
   );
-  const estadoConfirmado = await job.getState().catch((err) => {
-    console.error(`[queue] falha ao confirmar estado do job recém-criado da linha ${lineId}:`, err);
-    return "desconhecido";
-  });
   console.log(
     JSON.stringify({
       evento: "queue_add",
@@ -68,7 +77,6 @@ export async function scheduleLineRun(lineId: string, delayMs: number): Promise<
       jobId: job.id,
       delayMsPedido: Math.max(0, delayMs),
       delayMsConfirmado: job.opts.delay,
-      estadoConfirmado,
     })
   );
   return job;

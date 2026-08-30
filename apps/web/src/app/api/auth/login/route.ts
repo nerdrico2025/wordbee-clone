@@ -37,7 +37,12 @@ export async function POST(req: NextRequest) {
     NextResponse.json({ error: "E-mail ou senha inválidos." }, { status: 401 });
 
   if (!user) {
-    await checkRateLimit(rateLimitKey, maxAttempts, windowSeconds);
+    // Não conta a tentativa de novo aqui: já foi contada pelo checkRateLimit
+    // do topo desta função. Chamar de novo tanto duplicava o consumo do
+    // rate limit para tentativas com e-mail inexistente (2 comandos Redis
+    // extras por request) quanto inflava indevidamente o contador dessas
+    // tentativas (2x mais rápido pro limite do que uma tentativa com e-mail
+    // válido). Ver DECISIONS.md "redução de comandos Redis" (2026-08-29).
     return genericError();
   }
 

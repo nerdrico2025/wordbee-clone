@@ -3,7 +3,14 @@ import { closeProductionLineQueue, recordHeartbeat } from "@wordbee/shared";
 import { createRedisConnection } from "./redis.js";
 import { startProductionLineWorker, syncActiveLines, startHeartbeatLog } from "./production-line-worker.js";
 
-const HEARTBEAT_INTERVAL_MS = 30_000;
+// Era 30s (SET no Redis a cada 30s = ~86 mil comandos/mês, só disso, 24/7).
+// A chave expira em 90s (HEARTBEAT_TTL_SECONDS em worker-health.ts) — com
+// 60s de intervalo ainda sobra margem de 1.5x antes do badge do Dashboard
+// mostrar "offline" por engano, e o pior caso de detecção de queda real do
+// worker só piora de ~120s para ~150s (90s de TTL + até 1 intervalo perdido),
+// diferença irrelevante pra uma app de usuário único. Ver DECISIONS.md
+// "redução de comandos Redis" (2026-08-29).
+const HEARTBEAT_INTERVAL_MS = Number(process.env.WORKER_HEARTBEAT_INTERVAL_MS ?? "60000");
 
 async function main() {
   const redis = createRedisConnection();

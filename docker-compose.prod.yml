@@ -1,5 +1,22 @@
-# Docker Compose de produção — app web + worker + Postgres + Redis num VPS único.
-# Uso: ver README.md ("Deploy no VPS").
+# Docker Compose de produção — worker + Postgres + Redis para um VPS único.
+#
+# Escopo (decidido em 2026-08-25, ver DECISIONS.md "Migração Railway -> VPS
+# próprio (EasyPanel)"): o app "web" (Next.js) continua na Vercel — este
+# compose NÃO tem serviço "web". Ele existe para:
+#   1. Testar localmente que a imagem do worker builda e roda de ponta a
+#      ponta antes de configurar o mesmo Dockerfile no EasyPanel.
+#   2. Servir de fallback documentado para quem preferir um VPS "cru" (sem
+#      EasyPanel) via `docker compose` puro — nesse caso sobe Postgres e
+#      Redis próprios em vez dos templates do EasyPanel.
+#
+# No EasyPanel, o caminho recomendado é diferente deste arquivo: Postgres e
+# Redis via templates nativos do EasyPanel (backup agendado, upgrade de
+# versão e métricas prontos), e o worker como um serviço "App" separado
+# apontando para apps/worker/Dockerfile. Ver README.md ("Deploy no
+# EasyPanel").
+#
+# Uso (fallback via docker compose puro): ver README.md ("Deploy no VPS
+# sem EasyPanel").
 
 services:
   postgres:
@@ -27,25 +44,6 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
-
-  web:
-    build:
-      context: .
-      dockerfile: apps/web/Dockerfile
-    restart: unless-stopped
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    env_file: .env
-    environment:
-      DATABASE_URL: postgresql://wordbee:${POSTGRES_PASSWORD:?}@postgres:5432/wordbee
-      REDIS_URL: redis://redis:6379
-    ports:
-      - "3000:3000"
-    volumes:
-      - wordbee_uploads:/repo/storage/uploads
 
   worker:
     build:

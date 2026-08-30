@@ -62,7 +62,7 @@ const BASE_LINE = {
   lastRunAt: null,
 };
 
-const fakeRedis = { incr: vi.fn(async () => 1), decr: vi.fn(async () => 0), expire: vi.fn(async () => 1) };
+const fakeRedis = { eval: vi.fn(async () => 1), decr: vi.fn(async () => 0) };
 
 function noopLog() {
   /* silencia logs nos testes */

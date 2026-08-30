@@ -7,12 +7,33 @@ import {
   scheduleLineRun,
   getProductionLineQueue,
   recordLastSuccess,
+  snapshotRedisCommandCounts,
   type ProductionLineJobData,
 } from "@wordbee/shared";
 import { acquireLineLock, releaseLineLock } from "./lock.js";
 import { runProductionLine } from "./line-pipeline.js";
 
 const WORKER_CONCURRENCY = Number(process.env.WORKER_CONCURRENCY ?? "5");
+
+// BullMQ renova o lock de todo job "active" a cada `lockDuration / 2` e
+// varre jobs travados a cada `stalledInterval` — os DOIS rodam sozinhos,
+// pelo Worker, o tempo todo (inclusive parado sem nenhum job ativo), e cada
+// execução é 1 comando Redis (script Lua). Com o default do BullMQ
+// (lockDuration=30s → renova a cada 15s; stalledInterval=30s) isso sozinho
+// já soma ~2 comandos/min = ~86 mil/mês rodando o tempo todo, mesmo ocioso —
+// foi uma das maiores fontes de comandos "de fundo" identificadas na
+// investigação do aviso de limite do Upstash (ver DECISIONS.md
+// "redução de comandos Redis", 2026-08-29). Geração de artigo (texto+imagem+
+// upload WP, com retries) pode legitimamente levar minutos, então
+// lockDuration curto não ajuda em nada na prática — o lock é renovado
+// automaticamente enquanto o processo estiver vivo; só importa (mais
+// devagar) na recuperação de um worker que travou/morreu de verdade, o que
+// aqui já tem uma rede de segurança separada em `syncActiveLines()` no
+// boot. Valores maiores = 4x menos comandos de fundo, com detecção de job
+// travado mais lenta (worst case ~4min em vez de ~1min) — aceitável para
+// esta app de usuário único.
+const LOCK_DURATION_MS = Number(process.env.WORKER_LOCK_DURATION_MS ?? "120000");
+const STALLED_INTERVAL_MS = Number(process.env.WORKER_STALLED_INTERVAL_MS ?? "120000");
 
 /**
  * Id único por processo, gerado uma vez na carga do módulo e incluído em
@@ -116,7 +137,7 @@ export function startProductionLineWorker(connection: Redis): Worker<ProductionL
         console.log(JSON.stringify({ linha: lineId, evento: "tick_concluido", ultimoEvento: lastEvent, duracaoMs, workerId: WORKER_INSTANCE_ID }));
       }
     },
-    { connection, concurrency: WORKER_CONCURRENCY }
+    { connection, concurrency: WORKER_CONCURRENCY, lockDuration: LOCK_DURATION_MS, stalledInterval: STALLED_INTERVAL_MS }
   );
 
   worker.on("completed", (job) => {
@@ -190,7 +211,13 @@ export async function syncActiveLines(): Promise<void> {
   }
 }
 
-const HEARTBEAT_LOG_INTERVAL_MS = 5 * 60_000;
+// Era 5 min (~78 mil comandos Redis/mês só com o getJobCounts deste log).
+// Isso foi instrumentação de debug pontual pro bug de agendamento de
+// 2026-08-27, que já está corrigido e coberto por teste de integração —
+// não precisa mais desse nível de frequência para uma app de usuário único.
+// 30 min ainda é o suficiente pra notar no stream de log do EasyPanel que o
+// processo morreu. Ver DECISIONS.md "redução de comandos Redis" (2026-08-29).
+const HEARTBEAT_LOG_INTERVAL_MS = Number(process.env.WORKER_HEARTBEAT_LOG_INTERVAL_MS ?? String(30 * 60_000));
 
 /**
  * Log periódico de saúde do processo (distinto do heartbeat gravado no
@@ -199,6 +226,13 @@ const HEARTBEAT_LOG_INTERVAL_MS = 5 * 60_000;
  * parar de aparecer, o processo morreu (ou travou) sem reiniciar sozinho —
  * sinal de que falta configurar restart automático na infra, não um bug de
  * código. Instrumentação adicionada em 2026-08-27 (ver DECISIONS.md).
+ *
+ * Também loga `comandosRedis`, o snapshot acumulado (desde o boot do
+ * processo) do contador em memória de `instrumentRedisCommandCounts` — não
+ * gera nenhum comando Redis novo (é só leitura de um objeto local), e dá
+ * visibilidade real de quantos comandos/de que tipo o worker está gerando,
+ * sem depender só do aviso por e-mail do Upstash. Ver DECISIONS.md
+ * "contador de comandos Redis por categoria".
  */
 export function startHeartbeatLog(): NodeJS.Timeout {
   const logOnce = async () => {
@@ -216,6 +250,7 @@ export function startHeartbeatLog(): NodeJS.Timeout {
           timestamp: new Date().toISOString(),
           linhasAtivas,
           jobsNaFila,
+          comandosRedis: snapshotRedisCommandCounts(),
         })
       );
     } catch (err) {

@@ -4,15 +4,21 @@ import { withProviderSlot } from "./provider-concurrency.js";
 function fakeRedis() {
   let counters: Record<string, number> = {};
   return {
-    incr: vi.fn(async (key: string) => {
+    // Mock funcional do script Lua de acquire (INCR + EXPIRE condicional +
+    // DECR condicional, tudo atômico no Redis real) — replica exatamente a
+    // mesma lógica em JS para os testes, já que não há Redis real aqui.
+    eval: vi.fn(async (_script: string, _numKeys: number, key: string, max: number) => {
       counters[key] = (counters[key] ?? 0) + 1;
-      return counters[key];
+      if (counters[key] > max) {
+        counters[key] -= 1;
+        return 0;
+      }
+      return 1;
     }),
     decr: vi.fn(async (key: string) => {
       counters[key] = (counters[key] ?? 0) - 1;
       return counters[key];
     }),
-    expire: vi.fn(async () => 1),
     __reset: () => {
       counters = {};
     },

@@ -1,7 +1,11 @@
 #!/usr/bin/env bash
 # Backup do banco Postgres do Wordbee Clone.
 # Uso: ./scripts/backup.sh [diretorio-de-destino]
-# Lê DATABASE_URL do .env na raiz do projeto.
+# Lê DATABASE_URL do .env na raiz do projeto — OU, se DATABASE_URL já
+# estiver exportada no ambiente (ex.: para fazer backup de um banco que não
+# é o do .env local, como na migração Railway -> VPS), usa essa em vez de
+# ler o arquivo:
+#   DATABASE_URL="postgresql://...railway.../db" ./scripts/backup.sh backups/migration
 
 set -euo pipefail
 
@@ -10,16 +14,17 @@ ROOT_DIR="$(dirname "$SCRIPT_DIR")"
 ENV_FILE="$ROOT_DIR/.env"
 DEST_DIR="${1:-$ROOT_DIR/backups}"
 
-if [ ! -f "$ENV_FILE" ]; then
-  echo "Erro: $ENV_FILE não encontrado. Copie .env.example para .env e preencha antes de rodar o backup." >&2
-  exit 1
+if [ -z "${DATABASE_URL:-}" ]; then
+  if [ ! -f "$ENV_FILE" ]; then
+    echo "Erro: $ENV_FILE não encontrado. Copie .env.example para .env e preencha, ou exporte DATABASE_URL antes de rodar o backup." >&2
+    exit 1
+  fi
+  # shellcheck disable=SC1090
+  DATABASE_URL="$(grep -E '^DATABASE_URL=' "$ENV_FILE" | head -1 | cut -d '=' -f2- | tr -d '"')"
 fi
 
-# shellcheck disable=SC1090
-DATABASE_URL="$(grep -E '^DATABASE_URL=' "$ENV_FILE" | head -1 | cut -d '=' -f2- | tr -d '"')"
-
 if [ -z "${DATABASE_URL:-}" ]; then
-  echo "Erro: DATABASE_URL não definida em $ENV_FILE." >&2
+  echo "Erro: DATABASE_URL não definida (nem exportada, nem em $ENV_FILE)." >&2
   exit 1
 fi
 
