@@ -8,11 +8,11 @@ const nextConfig = {
   // "node .next/standalone/server.js" ("next start" não funciona nesse
   // modo — ver DECISIONS.md), e não traz nenhum benefício aqui.
   experimental: {
-    // @node-rs/argon2 embarca um binário nativo (.node); bullmq tem um
-    // adaptador opcional para Valkey (@valkey/valkey-glide) que não
-    // instalamos (usamos Redis puro via ioredis) — nenhum dos dois deve
-    // ser processado pelo bundler do webpack, só carregado via require em runtime.
-    serverComponentsExternalPackages: ["@node-rs/argon2", "bullmq"],
+    // @node-rs/argon2 embarca um binário nativo (.node) — não deve ser
+    // processado pelo bundler do webpack, só carregado via require em
+    // runtime. (bullmq foi removido daqui junto com o scheduler BullMQ —
+    // ver DECISIONS.md "scheduler cron+Postgres", 2026-08-30.)
+    serverComponentsExternalPackages: ["@node-rs/argon2"],
   },
   eslint: {
     ignoreDuringBuilds: false,

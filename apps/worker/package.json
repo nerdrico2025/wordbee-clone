@@ -14,7 +14,6 @@
   "dependencies": {
     "@wordbee/db": "*",
     "@wordbee/shared": "*",
-    "bullmq": "^5.21.2",
     "ioredis": "^5.4.1"
   },
   "devDependencies": {

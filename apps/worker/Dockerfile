@@ -1,4 +1,5 @@
-# Dockerfile do worker (BullMQ). Build a partir da RAIZ do monorepo:
+# Dockerfile do worker (scheduler cron+Postgres — ver DECISIONS.md "scheduler
+# cron+Postgres"). Build a partir da RAIZ do monorepo:
 #   docker build -f apps/worker/Dockerfile -t wordbee-worker .
 FROM node:20-slim AS base
 RUN apt-get update -y && apt-get install -y --no-install-recommends openssl && rm -rf /var/lib/apt/lists/*

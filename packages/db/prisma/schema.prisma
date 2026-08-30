@@ -188,6 +188,15 @@ model ProductionLine {
   consecutiveFailures Int              @default(0) @map("consecutive_failures")
   nextRunAt          DateTime?         @map("next_run_at")
   lastRunAt          DateTime?         @map("last_run_at")
+  // Lock de execução do scheduler cron+Postgres (substituiu o lock via Redis
+  // do BullMQ) — ver DECISIONS.md "scheduler cron+Postgres". lockedAt nulo =
+  // linha livre para ser reivindicada; não-nulo = alguma instância do worker
+  // está processando esta linha agora (ou travou processando — ver
+  // LINE_LOCK_STALE_MS em apps/worker/src/postgres-line-lock.ts). lockedBy
+  // guarda o workerId só para depuração (não é usado por nenhuma lógica de
+  // lock, que depende exclusivamente de lockedAt).
+  lockedAt           DateTime?         @map("locked_at")
+  lockedBy           String?           @map("locked_by")
   createdAt          DateTime          @default(now()) @map("created_at")
   updatedAt          DateTime          @updatedAt @map("updated_at")
 

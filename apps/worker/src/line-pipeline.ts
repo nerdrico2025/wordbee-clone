@@ -68,17 +68,18 @@ export type LogFn = (log: LineRunLog) => void;
 /**
  * Executa um "tick" de uma linha de produção: consome/gera título, gera
  * conteúdo+imagem, publica no WordPress e atualiza contadores/nextRunAt.
- * Nunca lança — todo erro é tratado e registrado; do ponto de vista do
- * BullMQ o job sempre "completa".
+ * Nunca lança — todo erro é tratado e registrado internamente.
  *
- * Importante: esta função NUNCA chama scheduleLineRun. O job atual (jobId =
- * lineId) ainda está "active" na fila enquanto ela roda, e o BullMQ ignora
- * silenciosamente qualquer add com um jobId já existente em qualquer estado
- * (ver docs.bullmq.io/guide/jobs/job-ids) — chamar scheduleLineRun aqui
- * dentro faria o reagendamento da próxima execução falhar sem erro nenhum.
- * O reagendamento real acontece no handler "completed"/"failed" do worker
- * (production-line-worker.ts), depois que o job atual já foi removido da
- * fila e o jobId está livre. Ver DECISIONS.md.
+ * Importante: esta função só escreve o próximo `nextRunAt` como parte da
+ * mesma escrita de conclusão (sucesso, falha determinística, rate limit ou
+ * máximo atingido) — nunca separadamente, e nunca via um mecanismo externo
+ * de agendamento. Quem chama esta função (`line-scheduler.ts`) só libera o
+ * lock de execução da linha (`releaseLine`, em `postgres-line-lock.ts`) *depois*
+ * que ela retorna, garantindo que o reagendamento sempre é visível antes da
+ * linha voltar a ficar reivindicável. Ver DECISIONS.md "scheduler
+ * cron+Postgres" — este é o mesmo requisito que já existia com BullMQ
+ * (reagendar só depois que o job "atual" sai da fila), só que aplicado ao
+ * lock em Postgres em vez de a um jobId.
  */
 export async function runProductionLine(redis: Redis, lineId: string, log: LogFn = () => undefined): Promise<void> {
   try {
@@ -86,12 +87,13 @@ export async function runProductionLine(redis: Redis, lineId: string, log: LogFn
   } catch (err) {
     // Rede de segurança final: nada abaixo desta função deveria lançar sem
     // ser tratado, mas se algo inesperado escapar (erro do Postgres,
-    // exceção em getDecryptedApiKey/getSiteCredentials, bug futuro), o job
-    // NUNCA pode virar "failed" no BullMQ — um job failed com jobId=lineId
-    // fica ocupando esse jobId (removeOnFail o mantém no Redis), e tanto
-    // cancelLineRun quanto o reagendamento seguinte ficariam bloqueados por
-    // ele. Ver DECISIONS.md ("cancelLineRun/syncActiveLines só tratavam
-    // waiting/delayed").
+    // exceção em getDecryptedApiKey/getSiteCredentials, bug futuro), esta
+    // função NUNCA pode lançar para quem chamou — `line-scheduler.ts`
+    // precisa liberar o lock da linha no `finally` dele independente do que
+    // acontecer aqui, e uma exceção não tratada não impediria isso (o
+    // `finally` do chamador roda de qualquer forma), mas deixaria a linha
+    // sem nenhum registro de falha nem novo `nextRunAt` — travada até o
+    // timeout de lock morto reivindicá-la de novo, sem nunca progredir.
     const message = toUserMessage(err);
     console.error(`[line-pipeline] erro inesperado não tratado na linha ${lineId}:`, err);
     log({ lineId, event: "erro_inesperado", detail: message });

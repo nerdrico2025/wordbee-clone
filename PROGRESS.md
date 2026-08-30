@@ -308,6 +308,41 @@ Estado da build do clone pessoal do Wordbee. Atualizado ao final de cada prompt.
 - **Redução total estimada**: de ≈ 443 mil pra ≈ 327 mil comandos/mês (≈ 26%), mantendo lock por linha, idempotência e retry/backoff intactos — validado com 99 testes automatizados (mocks atualizados pro script atômico) e os 4 testes de integração contra `redis-server` real (`production-line-worker.integration.test.ts`), além de validação manual do script Lua e do contador contra Redis real fora da suíte.
 - **Pendente de decisão do usuário** (documentado em detalhe em `DECISIONS.md`, não implementado): mesmo depois de toda otimização de baixo risco, ~327 mil/mês continuam essencialmente inevitáveis na arquitetura atual — falta decidir entre migrar pra Upstash pay-as-you-go, e/ou trocar o mecanismo de agendamento do worker (BullMQ always-on → polling do Postgres ou cron intermitente) pra eliminar o custo do long-poll, que é o maior item de longe. Nenhuma das duas foi implementada por serem decisão de custo/arquitetura, não bug.
 
+## ✅ Scheduler cron+Postgres — eliminação do worker BullMQ always-on (concluído em 2026-08-30)
+
+Implementa o item 2 pendente da investigação de Redis acima ("trocar o mecanismo de agendamento do worker"), eliminando por completo (não só reduzindo) a maior fonte de custo de fundo identificada.
+
+### Antes vs. depois
+
+| | Antes (BullMQ always-on) | Depois (cron+Postgres) |
+|---|---|---|
+| Disparo de execução | Fila BullMQ sobre Redis, job `jobId=lineId`, long-poll `BZPOPMIN` a cada ~10s mesmo ocioso | `setInterval` no worker consultando `production_lines` a cada `SCHEDULER_INTERVAL_MS` (padrão 90s) |
+| Lock por linha | `SET NX PX` no Redis (`line-lock:<id>`) | `SELECT ... FOR UPDATE SKIP LOCKED` + colunas `locked_at`/`locked_by` no Postgres |
+| Fonte de verdade do agendamento | `nextRunAt` no Postgres, espelhado como `delay` de job no Redis | `nextRunAt` no Postgres, ponto final — sem espelho em nenhum outro lugar |
+| Recuperação de worker travado/morto | `stalledInterval`/`lockDuration` do BullMQ + `syncActiveLines()` no boot | `locked_at` mais velho que `LINE_LOCK_STALE_MS` (20min) é reivindicável de novo, em **todo** tick |
+| Semáforo de concorrência por provedor de IA | Script Lua atômico no Redis | **Sem mudança** — mantido no Redis deliberadamente (ver DECISIONS.md) |
+| Custo de fundo estimado, worker ocioso | ~260 mil comandos Redis/mês só do `BZPOPMIN`, sozinho | Praticamente zero — só a query leve do tick (a cada 90s) no Postgres, que já é o banco principal da aplicação |
+| Latência de disparo | Segundos (delay do job expira) | Até ~1-2min (intervalo do tick) — aceitável dado que as linhas variam de 10min a 24h |
+
+### O que mudou no código
+
+- **Novo**: `apps/worker/src/postgres-line-lock.ts` (claim atômico + release), `apps/worker/src/line-scheduler.ts` (loop do cron, com guarda contra sobreposição de ticks), `apps/worker/src/heartbeat-log.ts` (extraído do antigo `production-line-worker.ts`, sem a contagem de jobs na fila que não existe mais), `scripts/retire-bullmq-line-queue.mjs` (limpeza idempotente das chaves órfãs da fila antiga no Redis).
+- **Removido por completo**: `apps/worker/src/production-line-worker.ts`, `apps/worker/src/lock.ts` (lock via Redis), `packages/shared/src/queue/index.ts` (fila BullMQ), a dependência `bullmq` (`apps/worker`, `packages/shared`, `next.config.mjs` do web). `apps/web/src/lib/production-lines.ts` não chama mais `scheduleLineRun`/`cancelLineRun` — só escreve `status`/`nextRunAt` no Postgres.
+- **Sem mudança nenhuma**: `line-pipeline.ts` (a lógica de um "tick" de linha — retry/backoff, rate limit, 5 falhas consecutivas, máximo atingido, idempotência via `idempotencyKey` — continua exatamente igual; só quem a invoca mudou) e `provider-concurrency.ts` (semáforo Redis intacto).
+- **Migração de schema** (`20260830120000_add_production_line_lock_columns`): adiciona só `locked_at`/`locked_by` (nullable) em `production_lines`. Nenhum `nextRunAt` existente é lido ou tocado — não havia dado de agendamento pra "migrar" de fato, já que o Postgres sempre foi a fonte de verdade mesmo com BullMQ.
+
+### Bug real pego pelos testes com Postgres de verdade
+
+A primeira versão da query de reivindicação nunca encontrava nenhuma linha devida, mesmo com `nextRunAt` vencido — causa raiz foi uma conversão implícita de timezone do Postgres ao misturar `now()` (`timestamptz`) com colunas `timestamp without time zone` em SQL bruto, num servidor cujo `TimeZone` de sessão não é UTC. Só apareceu porque o teste roda contra um Postgres efêmero real (`initdb`/`pg_ctl`), nunca apareceria com Prisma mockado — validação direta de por que o pedido insistiu em testes com banco real para este módulo. Ver DECISIONS.md para os detalhes completos da causa raiz e da correção (`AT TIME ZONE 'UTC'` explícito nos dois sentidos, leitura e escrita).
+
+### Testes
+
+- 8 novos testes de integração com Postgres real (`postgres-line-lock.integration.test.ts`): lock concorrente, `nextRunAt` futuro, status não-`ATIVA`, lock recente vs. lock morto, ordem/limite da reivindicação, `releaseLine`.
+- Testes do scheduler com Prisma/Redis mockados (`line-scheduler.test.ts`): sem sobreposição de ticks, `stop()`, processamento paralelo com isolamento de erro, liberação de lock garantida.
+- Teste de idempotência do script de limpeza da fila antiga (`retire-bullmq-line-queue.test.mjs`, Redis real efêmero): rodar duas vezes seguidas não duplica nem lança.
+- `line-pipeline.test.ts` (existente) só perdeu as referências a `scheduleLineRun` (que não existe mais) — todos os cenários de negócio pedidos (máximo atingido, rate limit, retry+backoff, 5 falhas consecutivas, duplicidade/idempotência) continuam cobertos, sem mudança de lógica.
+- `npm run typecheck`, `npm run lint`, `npm run build` e `vitest run` (106 testes) verdes.
+
 ## Como rodar localmente
 
 ```bash

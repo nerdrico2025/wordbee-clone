@@ -80,7 +80,9 @@ Todas documentadas com exemplos em [`.env.example`](./.env.example). Resumo:
 | `STORAGE_DRIVER` | Driver de storage para imagens de referência | `local` (único implementado) |
 | `STORAGE_LOCAL_PATH` | Pasta onde as imagens de referência ficam salvas | **Caminho absoluto** (web e worker rodam em diretórios diferentes) |
 | `AI_PROVIDER_CONCURRENCY` | Chamadas simultâneas de IA por provedor entre todas as linhas | Padrão `3` |
-| `WORKER_CONCURRENCY` | Linhas processadas em paralelo pelo worker | Padrão `5` |
+| `WORKER_CONCURRENCY` | Linhas reivindicadas/processadas em paralelo por tick do scheduler | Padrão `5` |
+| `SCHEDULER_INTERVAL_MS` | Intervalo do polling cron+Postgres do worker | Padrão `90000` (1.5min) — ver DECISIONS.md "scheduler cron+Postgres" |
+| `LINE_LOCK_STALE_MS` | Quando um lock de execução travado é considerado morto | Padrão `1200000` (20min) |
 | `LOGIN_RATE_LIMIT_MAX_ATTEMPTS` / `_WINDOW_MINUTES` | Rate limit do login | Padrão 5 tentativas / 15 min |
 | `OPENAI_TEXT_MODEL`, `GEMINI_TEXT_MODEL`, etc. | Nomes de modelo por provedor (opcional) | Só mude se um provedor descontinuar o modelo padrão — ver DECISIONS.md |
 | `PORT` | Porta do app web | Padrão `3000` |
@@ -128,16 +130,16 @@ Rode `npm run dev:worker` (dev) ou `docker compose -f docker-compose.prod.yml lo
 
 | Peça | Onde roda | Observação |
 |---|---|---|
-| **web** (Next.js) | **Vercel** (serverless) | Produtor dos jobs BullMQ (agenda/cancela ao criar/pausar/retomar/excluir uma linha) |
-| **worker** (BullMQ) | **EasyPanel**, serviço "App" único, Docker no VPS próprio | Consumidor dos jobs; único serviço que roda no VPS — sem Postgres nem Redis locais |
-| **Postgres** | **Neon** (gerenciado, externo) | Mesma instância para web e worker — `DATABASE_URL` idêntica nos dois ambientes |
-| **Redis** | **Upstash** (gerenciado, externo) | Mesma instância para web e worker — `REDIS_URL` idêntica nos dois ambientes; fila BullMQ (produtor=web, consumidor=worker) + rate limit de login (só web) |
+| **web** (Next.js) | **Vercel** (serverless) | Só escreve `status`/`nextRunAt` direto no Postgres ao criar/pausar/retomar/excluir uma linha — não agenda nada em fila nenhuma (ver DECISIONS.md "scheduler cron+Postgres") |
+| **worker** (cron+Postgres) | **EasyPanel**, serviço "App" único, Docker no VPS próprio | Faz polling periódico no Postgres (linhas ATIVA com `nextRunAt` vencido) e processa; único serviço que roda no VPS — sem Postgres nem Redis locais |
+| **Postgres** | **Neon** (gerenciado, externo) | Mesma instância para web e worker — `DATABASE_URL` idêntica nos dois ambientes; também é a fonte de verdade do agendamento (`nextRunAt`) e do lock de execução por linha |
+| **Redis** | **Upstash** (gerenciado, externo) | Mesma instância para web e worker — `REDIS_URL` idêntica nos dois ambientes; rate limit de login (só web), semáforo de concorrência por provedor de IA (só worker) e heartbeat de saúde do worker (escrito pelo worker, lido pelo web) |
 
 Não é um deploy único: são **dois ambientes de produção** (Vercel e EasyPanel) que **compartilham** dois serviços de dados externos (Neon e Upstash) em vez de cada um ter os seus. Railway foi totalmente descontinuada — nenhum serviço (web, worker, Postgres ou Redis) roda mais lá; ver `DECISIONS.md` ("Estado final da infraestrutura de produção — Railway descontinuada").
 
 > ⚠️ **Por que Postgres e Redis são serviços externos (Neon/Upstash) em vez de rodarem no próprio VPS/EasyPanel**: o web (Vercel) é **serverless com IP de saída dinâmico/não fixo** — ele não consegue depender de forma confiável de um banco ou Redis que só aceite conexões de uma rede privada ou de IPs fixos (regra de firewall por IP não serve para IP dinâmico, e deixar a porta aberta pra qualquer IP de origem é um risco desnecessário para expor dados de produção). Neon e Upstash são desenhados exatamente para esse padrão — endpoint público com TLS, otimizados para clientes serverless/edge. Isso também simplifica o VPS: o EasyPanel só precisa rodar o container do worker (stateless), sem Postgres/Redis para fazer backup, atualizar de versão ou proteger localmente.
 >
-> **Consequência prática**: `DATABASE_URL` e `REDIS_URL` do web (Vercel) e do worker (EasyPanel) precisam ser **literalmente o mesmo valor** nos dois ambientes — não "a mesma instância acessada por endereços diferentes", o mesmo texto de connection string. Se `REDIS_URL` divergir, o sintoma é **silencioso**: o web agenda o job num Redis que o worker nunca olha, a linha de produção nunca dispara, e nenhum dos dois lados loga erro — foi exatamente o bug real já visto em produção que motivou documentar isso com este destaque.
+> **Consequência prática**: `DATABASE_URL` e `REDIS_URL` do web (Vercel) e do worker (EasyPanel) precisam ser **literalmente o mesmo valor** nos dois ambientes — não "a mesma instância acessada por endereços diferentes", o mesmo texto de connection string. Se `DATABASE_URL` divergir, o web escreve `nextRunAt`/`status` num banco que o worker nunca lê, e a linha de produção nunca dispara. Se `REDIS_URL` divergir, o sintoma é mais discreto (rate limit de login e badge de saúde do worker no Dashboard passam a se comportar errado), mas o agendamento em si continua funcionando — desde a migração para cron+Postgres, o Redis não é mais crítico pro disparo das linhas em si.
 
 > O `docker-compose.prod.yml` deste repo **não** é usado em produção — ele existe só para testar localmente (`docker compose -f docker-compose.prod.yml up -d --build`, com Postgres/Redis locais nesse cenário de teste) e como fallback documentado pra quem preferir hospedar Postgres/Redis no próprio VPS em vez de Neon/Upstash (seção seguinte, com os mesmos avisos de IP dinâmico da Vercel).
 
@@ -145,7 +147,7 @@ Não é um deploy único: são **dois ambientes de produção** (Vercel e EasyPa
 
 - A **`ENCRYPTION_KEY`** de produção (a mesma configurada hoje na Vercel — copie do painel: Settings → Environment Variables). **Nunca gere uma nova** nem deixe divergir entre Vercel e EasyPanel: é ela que descriptografa `api_keys.chave_encrypted` e `wp_sites.app_password_encrypted` no Postgres (Neon); se divergir, esses dados ficam ilegíveis sem erro visível na hora, só na primeira tentativa de uso.
 - A **connection string do Neon** (Postgres) — mesmo valor de `DATABASE_URL` nos dois ambientes.
-- A **connection string TCP do Upstash** (`rediss://...`, não a REST URL — o BullMQ precisa do protocolo Redis nativo) — mesmo valor de `REDIS_URL` nos dois ambientes.
+- A **connection string TCP do Upstash** (`rediss://...`, não a REST URL — `ioredis` precisa do protocolo Redis nativo) — mesmo valor de `REDIS_URL` nos dois ambientes.
 - O `SESSION_SECRET` da Vercel (só o web usa; não precisa no worker).
 
 ### Passo a passo (setup do zero, ou recriar o ambiente)
@@ -167,7 +169,7 @@ Não é um deploy único: são **dois ambientes de produção** (Vercel e EasyPa
 - **+ Service → App**.
 - **Source**: conecte o repositório do GitHub deste projeto.
 - **Build**: tipo Dockerfile, caminho `apps/worker/Dockerfile`, **contexto de build = raiz do repositório** (não `apps/worker/`) — o Dockerfile copia `package.json`/`packages/*` da raiz do monorepo.
-- **Sem porta exposta e sem domínio**: o worker não sobe servidor HTTP (só consome a fila BullMQ), então não marque "Expose" nem configure domínio/SSL para esse serviço.
+- **Sem porta exposta e sem domínio**: o worker não sobe servidor HTTP (só faz polling no Postgres), então não marque "Expose" nem configure domínio/SSL para esse serviço.
 - **Variáveis de ambiente** do serviço worker (ver `.env.production.example` para a lista completa e comentada):
   - `DATABASE_URL` → connection string do **Neon** (passo 1) — idêntica à da Vercel
   - `REDIS_URL` → connection string do **Upstash** (passo 2) — idêntica à da Vercel
@@ -289,13 +291,13 @@ Monorepo com npm workspaces:
 
 ```
 apps/web      Next.js 14 (App Router) — painel + API routes
-apps/worker   Node.js — worker BullMQ que executa as Linhas de Produção
+apps/worker   Node.js — scheduler cron+Postgres que executa as Linhas de Produção
 packages/db   Prisma (schema, migrações, client compartilhado)
 packages/shared  Criptografia, sessão, TOTP, clientes de IA (OpenAI/Gemini/
-                 Grok/Stability), cliente WordPress, storage, fila BullMQ
+                 Grok/Stability), cliente WordPress, storage
 ```
 
 - **Auth**: usuário único, sessão em cookie httpOnly assinado (JWT), sem NextAuth.
 - **Criptografia**: AES-256-GCM para chaves de API e senhas de aplicação WordPress.
-- **Fila/Agendamento**: BullMQ sobre Redis — cada linha de produção se auto-reagenda a cada execução; lock por linha e limite de concorrência por provedor de IA via Redis.
+- **Agendamento**: cron+Postgres, não BullMQ/Redis (ver DECISIONS.md "scheduler cron+Postgres") — o worker faz polling periódico em `production_lines` (`status='ATIVA' AND next_run_at <= now()`), reivindica linhas via `FOR UPDATE SKIP LOCKED` (lock de execução por linha direto no Postgres) e cada linha se auto-reagenda a cada execução. O limite de concorrência por provedor de IA continua via semáforo Redis (script Lua atômico).
 - **Storage**: disco local em dev, com abstração pronta para trocar por S3/Supabase.

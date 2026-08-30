@@ -3,18 +3,17 @@ import { Redis } from "ioredis";
 let client: Redis | undefined;
 
 /**
- * Cliente Redis do processo web, usado para rate limiting (Node.js runtime
- * only). Lê a MESMA variável `REDIS_URL` que `packages/shared/src/queue/index.ts`
- * usa para agendar/cancelar jobs do BullMQ (`scheduleLineRun`/`cancelLineRun`,
- * chamados por `production-lines.ts`) — são conexões `ioredis` separadas,
- * mas apontam para o mesmo Redis por design (uma única instância pra tudo,
- * ver DECISIONS.md "REDIS_URL única para fila BullMQ e rate limit").
+ * Cliente Redis do processo web, usado para rate limiting de login e para
+ * ler o heartbeat/último-sucesso do worker (badge de saúde no Dashboard —
+ * ver `getWorkerHealth` em `@wordbee/shared`). Desde a migração do
+ * scheduler de Linhas de Produção para cron+Postgres (ver DECISIONS.md
+ * "scheduler cron+Postgres", 2026-08-30), o web não agenda nem cancela mais
+ * nada no Redis — `production-lines.ts` só escreve `status`/`nextRunAt`
+ * direto no Postgres, e o worker reivindica sozinho.
  *
- * Web (Vercel) e worker (`apps/worker/src/redis.ts`) SEMPRE precisam ter
- * `REDIS_URL` apontando pro mesmo Redis — web enfileira os jobs, worker os
- * consome; se divergirem, o worker nunca vê os jobs que o web agenda (bug
- * real já visto em produção: worker no EasyPanel apontando pra um Redis
- * diferente do REDIS_URL configurado na Vercel).
+ * Ainda assim, `REDIS_URL` aqui precisa apontar pro MESMO Redis usado pelo
+ * worker (`apps/worker/src/redis.ts`) — é de lá que vem o heartbeat que o
+ * badge do Dashboard lê.
  */
 export function getRedis(): Redis {
   if (!client) {

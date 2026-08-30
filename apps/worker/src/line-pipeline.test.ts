@@ -5,7 +5,6 @@ const generateArticle = vi.fn();
 const generateImage = vi.fn();
 const uploadMedia = vi.fn();
 const createPost = vi.fn();
-const scheduleLineRun = vi.fn();
 
 vi.mock("@wordbee/shared", async () => {
   const actual = await vi.importActual<typeof import("@wordbee/shared")>("@wordbee/shared");
@@ -15,7 +14,6 @@ vi.mock("@wordbee/shared", async () => {
     createImageProvider: vi.fn(() => ({ generateImage })),
     uploadMedia,
     createPost,
-    scheduleLineRun,
     getStorageDriver: vi.fn(() => ({ read: vi.fn(), save: vi.fn(), delete: vi.fn(), publicUrl: vi.fn() })),
   };
 });
@@ -104,10 +102,6 @@ describe("runProductionLine — rate limit", () => {
     const finalUpdate = updateCalls.at(-1) as { data: Record<string, unknown> };
     expect(finalUpdate.data.status).toBeUndefined();
     expect(finalUpdate.data.nextRunAt).toBeInstanceOf(Date);
-    // O reagendamento na fila do BullMQ acontece no handler "completed" do
-    // worker (production-line-worker.ts), nunca de dentro do processor —
-    // ver DECISIONS.md.
-    expect(scheduleLineRun).not.toHaveBeenCalled();
   });
 
   it("com rateLimitBehavior=PAUSAR, pausa a linha imediatamente", async () => {
@@ -146,7 +140,6 @@ describe("runProductionLine — falha e retry", () => {
     expect(createPost).toHaveBeenCalledTimes(1);
     const successUpdate = db.article.update.mock.calls.find((c: unknown[]) => (c[0] as { data: Record<string, unknown> }).data.status === "PUBLICADO");
     expect(successUpdate).toBeTruthy();
-    expect(scheduleLineRun).not.toHaveBeenCalled();
   }, 15_000);
 
   it("após esgotar as 3 tentativas, marca o artigo como FALHA e incrementa consecutiveFailures", async () => {
@@ -168,7 +161,6 @@ describe("runProductionLine — falha e retry", () => {
     expect(db.productionLine.update).toHaveBeenCalledWith(
       expect.objectContaining({ data: expect.objectContaining({ consecutiveFailures: 2 }) })
     );
-    expect(scheduleLineRun).not.toHaveBeenCalled();
   }, 15_000);
 
   it("pausa a linha após atingir 5 falhas consecutivas", async () => {
@@ -185,7 +177,6 @@ describe("runProductionLine — falha e retry", () => {
     expect(db.productionLine.update).toHaveBeenCalledWith(
       expect.objectContaining({ data: expect.objectContaining({ status: "PAUSADA", consecutiveFailures: 5 }) })
     );
-    expect(scheduleLineRun).not.toHaveBeenCalled();
   }, 15_000);
 });
 
@@ -200,26 +191,26 @@ describe("runProductionLine — idempotência / duplicidade", () => {
     expect(db.article.create).not.toHaveBeenCalled();
     expect(generateArticle).not.toHaveBeenCalled();
     expect(createPost).not.toHaveBeenCalled();
-    expect(scheduleLineRun).not.toHaveBeenCalled();
   });
 });
 
 describe("runProductionLine — rede de segurança contra exceção inesperada", () => {
-  it("erro fora do try/catch dos providers (ex.: getDecryptedApiKey lançando de verdade) nunca escapa: registra falha genérica e não chama scheduleLineRun", async () => {
+  it("erro fora do try/catch dos providers (ex.: getDecryptedApiKey lançando de verdade) nunca escapa: registra falha genérica", async () => {
     db.productionLine.findUnique.mockResolvedValue({ ...BASE_LINE, consecutiveFailures: 1 });
     db.titleQueueItem.findFirst.mockResolvedValue(null);
     getDecryptedApiKey.mockRejectedValueOnce(new Error("Postgres indisponível"));
 
-    // A garantia central: o BullMQ NUNCA pode ver esse job como "failed" —
-    // isso deixaria um job morto ocupando jobId=lineId pra sempre (ver
-    // DECISIONS.md). runProductionLine precisa resolver normalmente mesmo
-    // diante de um erro totalmente inesperado.
+    // A garantia central: um erro totalmente inesperado nunca pode escapar
+    // de runProductionLine — o scheduler cron+Postgres precisa liberar o
+    // lock da linha (`releaseLine`, no `finally` de `line-scheduler.ts`)
+    // não importa o que aconteça aqui dentro; se isso lançasse, a linha
+    // ficaria travada (locked_at preso) até o timeout de lock morto. Ver
+    // DECISIONS.md.
     await expect(runProductionLine(fakeRedis as never, "line-1", noopLog)).resolves.toBeUndefined();
 
     expect(db.productionLine.update).toHaveBeenCalledWith(
       expect.objectContaining({ data: expect.objectContaining({ consecutiveFailures: 2 }) })
     );
-    expect(scheduleLineRun).not.toHaveBeenCalled();
   });
 
   it("se até a releitura da linha no catch falhar (Postgres realmente fora do ar), ainda assim resolve sem lançar", async () => {
@@ -228,7 +219,5 @@ describe("runProductionLine — rede de segurança contra exceção inesperada",
     getDecryptedApiKey.mockRejectedValueOnce(new Error("timeout de rede"));
 
     await expect(runProductionLine(fakeRedis as never, "line-1", noopLog)).resolves.toBeUndefined();
-
-    expect(scheduleLineRun).not.toHaveBeenCalled();
   });
 });

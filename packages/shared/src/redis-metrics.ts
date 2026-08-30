@@ -9,19 +9,19 @@ import type { Redis } from "ioredis";
  * nem compartilhado entre processos).
  *
  * Envolve `redis.sendCommand`, o ponto por onde TODO comando do ioredis
- * passa (inclusive os disparados internamente pelo BullMQ via scripts Lua,
- * que aparecem aqui como "evalsha"/"eval") — é a mesma técnica usada por
- * bibliotecas de APM (Sentry/Datadog) pra instrumentar ioredis sem tocar no
- * protocolo. Ver DECISIONS.md "contador de comandos Redis por categoria".
+ * passa (inclusive scripts Lua via EVAL/EVALSHA, que aparecem aqui como
+ * "evalsha"/"eval") — é a mesma técnica usada por bibliotecas de APM
+ * (Sentry/Datadog) pra instrumentar ioredis sem tocar no protocolo. Ver
+ * DECISIONS.md "contador de comandos Redis por categoria".
  *
- * IMPORTANTE — cobertura parcial conhecida: o BullMQ `Worker` chama
- * internamente `connection.duplicate(...)` pra abrir conexões próprias (a
- * `blockingConnection` usada no long-poll de jobs delayed via `BZPOPMIN`, e
- * outras). `duplicate()` do ioredis cria uma instância `Redis` nova — não
- * herda o `sendCommand` sobrescrito aqui. Por isso também envolvemos
- * `redis.duplicate` abaixo, pra qualquer duplicata (inclusive as que o
- * BullMQ cria por baixo dos panos) continuar sendo contada. Ver
- * DECISIONS.md sobre o achado do long-poll de ~10s do BullMQ.
+ * Também envolvemos `redis.duplicate` abaixo: qualquer biblioteca que abra
+ * conexões próprias via `connection.duplicate(...)` (ioredis cria uma
+ * instância `Redis` nova nesse caso, que não herdaria o `sendCommand`
+ * sobrescrito aqui) continua tendo seus comandos contados. Adicionado
+ * originalmente por causa do BullMQ (removido do projeto em 2026-08-30, ver
+ * DECISIONS.md "scheduler cron+Postgres" — seu `Worker` usava
+ * `duplicate()` para o long-poll `BZPOPMIN` de jobs delayed), mantido por
+ * ser uma proteção genérica e barata.
  */
 const counts: Record<string, number> = {};
 

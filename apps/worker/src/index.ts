@@ -1,7 +1,9 @@
+import { randomUUID } from "node:crypto";
 import { prisma } from "@wordbee/db";
-import { closeProductionLineQueue, recordHeartbeat } from "@wordbee/shared";
+import { recordHeartbeat } from "@wordbee/shared";
 import { createRedisConnection } from "./redis.js";
-import { startProductionLineWorker, syncActiveLines, startHeartbeatLog } from "./production-line-worker.js";
+import { startLineScheduler } from "./line-scheduler.js";
+import { startHeartbeatLog } from "./heartbeat-log.js";
 
 // Era 30s (SET no Redis a cada 30s = ~86 mil comandos/mês, só disso, 24/7).
 // A chave expira em 90s (HEARTBEAT_TTL_SECONDS em worker-health.ts) — com
@@ -11,6 +13,14 @@ import { startProductionLineWorker, syncActiveLines, startHeartbeatLog } from ".
 // diferença irrelevante pra uma app de usuário único. Ver DECISIONS.md
 // "redução de comandos Redis" (2026-08-29).
 const HEARTBEAT_INTERVAL_MS = Number(process.env.WORKER_HEARTBEAT_INTERVAL_MS ?? "60000");
+
+/**
+ * Id único por processo, gerado uma vez na carga do módulo e incluído em
+ * todo log estruturado do worker (scheduler, heartbeat) — permite detectar
+ * duas instâncias rodando ao mesmo tempo (ex.: deploy com múltiplas réplicas
+ * sem querer) direto no stream de log do EasyPanel. Ver DECISIONS.md.
+ */
+const WORKER_INSTANCE_ID = randomUUID();
 
 async function main() {
   const redis = createRedisConnection();
@@ -26,19 +36,16 @@ async function main() {
     recordHeartbeat(redis).catch((err) => console.error("[worker] falha ao gravar heartbeat:", err));
   }, HEARTBEAT_INTERVAL_MS);
 
-  await syncActiveLines();
+  const scheduler = startLineScheduler(redis, WORKER_INSTANCE_ID);
+  console.log("[worker] Scheduler de Linhas de Produção (cron+Postgres) pronto.");
 
-  const bullWorker = startProductionLineWorker(redis);
-  console.log("[worker] Processador de Linhas de Produção pronto.");
-
-  const logHeartbeatTimer = startHeartbeatLog();
+  const logHeartbeatTimer = startHeartbeatLog(WORKER_INSTANCE_ID);
 
   const shutdown = async () => {
     console.log("[worker] Encerrando...");
     clearInterval(heartbeatTimer);
     clearInterval(logHeartbeatTimer);
-    await bullWorker.close();
-    await closeProductionLineQueue();
+    await scheduler.stop();
     await redis.quit();
     await prisma.$disconnect();
     process.exit(0);

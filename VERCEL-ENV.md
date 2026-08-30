@@ -1,6 +1,6 @@
 # Variáveis de ambiente — Vercel (web) + worker externo
 
-Este projeto tem **dois processos**: o app **web** (Next.js, pode rodar na Vercel como serverless) e o **worker** (BullMQ, processo *always-on* que executa as Linhas de Produção). A Vercel **não suporta processos de longa duração** — funções serverless são efêmeras e não conseguem manter um `Worker` do BullMQ escutando a fila continuamente. Por isso:
+Este projeto tem **dois processos**: o app **web** (Next.js, pode rodar na Vercel como serverless) e o **worker** (scheduler cron+Postgres, processo *always-on* que executa as Linhas de Produção — ver DECISIONS.md "scheduler cron+Postgres"). A Vercel **não suporta processos de longa duração** — funções serverless são efêmeras e não conseguem manter um processo fazendo polling continuamente. Por isso:
 
 - A **Vercel roda só o app web** (login, telas, geração unitária "Criar Artigo", API routes).
 - O **worker precisa rodar em outro lugar**, um serviço always-on. **Ambiente atual de produção: EasyPanel** (Docker, num VPS próprio) — ver README.md ("Deploy no EasyPanel"). Fly.io ou um VPS "cru" com Docker Compose (`docker-compose.prod.yml`, também no README) funcionam do mesmo jeito, já que o worker é só um container Docker comum. Sem o worker rodando, as Linhas de Produção ficam paradas — só a geração unitária continua funcionando pela Vercel.
@@ -17,8 +17,8 @@ Este projeto tem **dois processos**: o app **web** (Next.js, pode rodar na Verce
 
 | Variável | Para que serve | Obrigatória? | Exemplo / como obter |
 |---|---|---|---|
-| `DATABASE_URL` | Conexão com o Postgres (Prisma) | **Obrigatória** | `postgresql://usuario:senha@host:5432/banco?sslmode=require` — em produção, a connection string do **Neon** (ambiente atual). **Precisa ser idêntica à do worker no EasyPanel.** |
-| `REDIS_URL` | Conexão com o Redis (usado pelo web só para rate limit de login e para agendar/cancelar jobs do worker) | **Obrigatória** | string de conexão **TCP/Redis** — em produção, a connection string do **Upstash** (ambiente atual; não a REST URL — o BullMQ precisa do protocolo Redis nativo). **Precisa ser idêntica à do worker no EasyPanel** — se divergir, o worker nunca vê os jobs que o web agenda (bug real já visto em produção, ver DECISIONS.md "Redis único via Upstash"). |
+| `DATABASE_URL` | Conexão com o Postgres (Prisma) — também é onde o web escreve `status`/`nextRunAt` da linha, sem passar por fila nenhuma | **Obrigatória** | `postgresql://usuario:senha@host:5432/banco?sslmode=require` — em produção, a connection string do **Neon** (ambiente atual). **Precisa ser idêntica à do worker no EasyPanel** — se divergir, o worker nunca vê as linhas que o web cria/atualiza. |
+| `REDIS_URL` | Conexão com o Redis (usado pelo web só para rate limit de login e para ler o heartbeat de saúde do worker — badge do Dashboard) | **Obrigatória** | string de conexão **TCP/Redis** — em produção, a connection string do **Upstash** (ambiente atual; não a REST URL — `ioredis` precisa do protocolo Redis nativo). **Precisa ser idêntica à do worker no EasyPanel** — se divergir, o badge de saúde do worker no Dashboard mostra "offline" mesmo com o worker rodando normalmente. |
 | `SESSION_SECRET` | Assina o cookie de sessão (JWT HS256) | **Obrigatória** | Gerar com `openssl rand -base64 48` |
 | `ENCRYPTION_KEY` | Chave-mestra AES-256-GCM para criptografar as chaves de API e senhas de aplicação WordPress salvas no banco | **Obrigatória** | Gerar com `openssl rand -base64 32` — **guarde em local seguro**, se perder essa chave os dados criptografados ficam ilegíveis |
 | `SESSION_TTL_HOURS` | Duração da sessão de login, em horas | Opcional (padrão `168` = 7 dias) | `168` |
@@ -48,12 +48,14 @@ Este projeto tem **dois processos**: o app **web** (Next.js, pode rodar na Verce
 
 | Variável | Para que serve | Obrigatória? | Exemplo / como obter |
 |---|---|---|---|
-| `DATABASE_URL` | Mesmo Postgres do app web | **Obrigatória** | **A mesma string de conexão usada na Vercel** |
-| `REDIS_URL` | Mesmo Redis do app web (fila BullMQ) | **Obrigatória** | **A mesma string de conexão (TCP) usada na Vercel** |
+| `DATABASE_URL` | Mesmo Postgres do app web — fonte de verdade do agendamento (`next_run_at`) e do lock de execução por linha | **Obrigatória** | **A mesma string de conexão usada na Vercel** |
+| `REDIS_URL` | Mesmo Redis do app web (semáforo de concorrência por IA + heartbeat de saúde) | **Obrigatória** | **A mesma string de conexão (TCP) usada na Vercel** |
 | `ENCRYPTION_KEY` | Descriptografa as chaves de API e senhas de aplicação para chamar IA/WordPress | **Obrigatória** | **Precisa ser exatamente a mesma chave usada na Vercel** — se divergir, o worker não consegue ler nada que o web salvou |
 | `STORAGE_DRIVER` / `STORAGE_LOCAL_PATH` | Onde ler as imagens de referência das linhas | Opcional | Se usar `local`, aponte para um disco persistente do próprio host do worker (ex.: volume do EasyPanel) — **não** o disco da Vercel |
 | `AI_PROVIDER_CONCURRENCY` | Chamadas simultâneas de IA por provedor entre todas as linhas ativas | Opcional (padrão `3`) | `3` |
-| `WORKER_CONCURRENCY` | Quantas linhas o worker processa em paralelo | Opcional (padrão `5`) | `5` |
+| `WORKER_CONCURRENCY` | Quantas linhas o scheduler reivindica/processa em paralelo por tick | Opcional (padrão `5`) | `5` |
+| `SCHEDULER_INTERVAL_MS` | Intervalo do polling cron+Postgres | Opcional (padrão `90000` = 1.5min) | `90000` |
+| `LINE_LOCK_STALE_MS` | Quando um lock de execução travado é considerado morto | Opcional (padrão `1200000` = 20min) | `1200000` |
 | `OPENAI_TEXT_MODEL` … `OPENROUTER_IMAGE_DEFAULT_MODEL` | Mesmos overrides de modelo do app web | Opcional | Mantenha **iguais** aos da Vercel para consistência |
 
 **Não precisa no worker:** `SESSION_SECRET`, `SESSION_TTL_HOURS`, `SESSION_COOKIE_NAME`, `LOGIN_RATE_LIMIT_*` (o worker não lida com login/sessão) e `ADMIN_*` (só usado pelo seed).

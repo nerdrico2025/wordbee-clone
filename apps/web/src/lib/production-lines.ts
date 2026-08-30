@@ -1,7 +1,7 @@
 import "server-only";
 import { prisma } from "@wordbee/db";
 import type { AiProviderName, ArticleTypeSlug } from "@wordbee/shared";
-import { createTextProvider, scheduleLineRun, cancelLineRun, getStorageDriver, AiProviderError } from "@wordbee/shared";
+import { createTextProvider, getStorageDriver, AiProviderError } from "@wordbee/shared";
 import { getDecryptedApiKey } from "@/lib/api-keys";
 
 const MAX_REFERENCE_IMAGES = 5;
@@ -85,7 +85,10 @@ export async function createProductionLine(userId: string, input: CreateProducti
     include: WP_SITE_INCLUDE,
   });
 
-  await scheduleLineRun(line.id, 0);
+  // Nada a agendar explicitamente: o scheduler cron+Postgres do worker
+  // reivindica qualquer linha ATIVA com nextRunAt vencido sozinho, a cada
+  // tick (até ~1-2min de latência) — ver DECISIONS.md "scheduler
+  // cron+Postgres".
   return line;
 }
 
@@ -93,7 +96,8 @@ export async function pauseProductionLine(userId: string, lineId: string) {
   const line = await prisma.productionLine.findFirst({ where: { id: lineId, userId } });
   if (!line) throw new Error("Linha não encontrada.");
 
-  await cancelLineRun(lineId);
+  // Sem cancelamento explícito de fila: o scheduler só reivindica linhas com
+  // status=ATIVA, então uma linha PAUSADA nunca é reivindicada de novo.
   return prisma.productionLine.update({
     where: { id: lineId },
     data: { status: "PAUSADA", pauseReason: "Pausada manualmente pelo usuário." },
@@ -114,7 +118,6 @@ export async function resumeProductionLine(userId: string, lineId: string) {
     data: { status: "ATIVA", pauseReason: null, consecutiveFailures: 0, nextRunAt },
     include: WP_SITE_INCLUDE,
   });
-  await scheduleLineRun(lineId, 0);
   return updated;
 }
 
@@ -122,7 +125,6 @@ export async function deleteProductionLine(userId: string, lineId: string) {
   const line = await prisma.productionLine.findFirst({ where: { id: lineId, userId } });
   if (!line) throw new Error("Linha não encontrada.");
 
-  await cancelLineRun(lineId);
   await prisma.productionLine.delete({ where: { id: lineId } });
 }
 
