@@ -10,10 +10,12 @@ import {
   getStorageDriver,
   AiProviderError,
   WordPressError,
+  IMAGE_PROVIDERS,
 } from "@wordbee/shared";
 import { getDecryptedApiKey } from "./api-keys.js";
 import { getSiteCredentials } from "./wp-sites.js";
 import { withProviderSlot } from "./provider-concurrency.js";
+import { jitteredMs } from "./jitter.js";
 
 const MAX_ATTEMPTS = 3;
 const CONSECUTIVE_FAILURES_TO_PAUSE = 5;
@@ -34,12 +36,10 @@ function pickRandomTema(temas: string[]): string {
 // PRÓXIMO ciclo é calculado a partir de intervaloMin — nunca na primeira
 // execução (delay 0 na criação da linha, calculado em apps/web, que nunca
 // passa por aqui) nem no defer de rate limit (RATE_LIMIT_DEFER_MS é fixo).
-// Math.max(0, ...) é só defensivo: com jitter de ±10% sobre um valor
-// positivo o resultado nunca fica negativo de verdade. Ver DECISIONS.md.
+// O cálculo em si vive em `jitter.ts` desde que a distribuição para Páginas
+// do Facebook passou a precisar do mesmo comportamento. Ver DECISIONS.md.
 function jitteredIntervalMs(intervaloMin: number): number {
-  const baseMs = intervaloMin * 60_000;
-  const jitterMs = baseMs * 0.1 * (Math.random() * 2 - 1);
-  return Math.max(0, Math.round(baseMs + jitterMs));
+  return jitteredMs(intervaloMin * 60_000);
 }
 
 function buildImagePrompt(titulo: string, tema: string): string {
@@ -55,6 +55,23 @@ function toUserMessage(err: unknown): string {
 
 function isRateLimit(err: unknown): boolean {
   return err instanceof AiProviderError && (err.code === "rate_limit" || err.code === "unavailable");
+}
+
+// Antes, este carregamento só rodava para `iaImagem === "GEMINI"` — um
+// resquício de quando Gemini era o único provedor de imagem com suporte a
+// imagens de referência. O cliente OpenRouter passou a suportar
+// `referenceImages` de verdade (packages/shared/src/ai/openrouter.ts,
+// `input_references`) sem que esta checagem fosse atualizada — como
+// OpenRouter é hoje o provedor efetivamente em uso em produção, as imagens
+// de referência cadastradas em qualquer linha ficavam salvas no storage e
+// cadastradas no banco, mas nunca eram lidas nem enviadas ao provedor
+// (falha silenciosa, achado na auditoria de PROJECT-STATE.md). Corrigido
+// para depender da CAPACIDADE declarada no registry (a mesma fonte que já
+// alimenta a UI, `suportaImagensReferencia`), não de um nome de provedor
+// hardcoded — qualquer provedor futuro que declare suporte passa a
+// funcionar automaticamente, sem precisar tocar aqui de novo.
+function providerSupportsReferenceImages(iaImagem: string): boolean {
+  return IMAGE_PROVIDERS.some((p) => p.provider === iaImagem && p.suportaImagensReferencia === true);
 }
 
 export interface LineRunLog {
@@ -207,10 +224,9 @@ async function runProductionLineInner(redis: Redis, lineId: string, log: LogFn):
     await prisma.titleQueueItem.update({ where: { id: titleItem.id }, data: { status: "USADO" } });
   }
 
-  const referenceImages =
-    line.iaImagem === "GEMINI"
-      ? await loadReferenceImages(lineId)
-      : undefined;
+  const referenceImages = providerSupportsReferenceImages(line.iaImagem)
+    ? await loadReferenceImages(lineId)
+    : undefined;
 
   let lastError: unknown;
   let rateLimited = false;

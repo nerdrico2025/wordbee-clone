@@ -6,6 +6,8 @@ const generateImage = vi.fn();
 const uploadMedia = vi.fn();
 const createPost = vi.fn();
 
+const storageRead = vi.fn();
+
 vi.mock("@wordbee/shared", async () => {
   const actual = await vi.importActual<typeof import("@wordbee/shared")>("@wordbee/shared");
   return {
@@ -14,7 +16,7 @@ vi.mock("@wordbee/shared", async () => {
     createImageProvider: vi.fn(() => ({ generateImage })),
     uploadMedia,
     createPost,
-    getStorageDriver: vi.fn(() => ({ read: vi.fn(), save: vi.fn(), delete: vi.fn(), publicUrl: vi.fn() })),
+    getStorageDriver: vi.fn(() => ({ read: storageRead, save: vi.fn(), delete: vi.fn(), publicUrl: vi.fn() })),
   };
 });
 
@@ -73,6 +75,66 @@ beforeEach(() => {
   db.article.findMany.mockResolvedValue([]);
   db.lineReferenceImage.findMany.mockResolvedValue([]);
   generateTitles.mockResolvedValue(["Título gerado pela IA"]);
+});
+
+describe("runProductionLine — imagens de referência", () => {
+  function setUpArticleForImageGeneration() {
+    db.titleQueueItem.findFirst.mockResolvedValue(null);
+    db.article.findUnique.mockResolvedValue(null);
+    db.article.create.mockResolvedValue({ id: "article-1" });
+    db.article.findUniqueOrThrow.mockResolvedValue({
+      id: "article-1",
+      contentHtml: "<p>já gerado</p>",
+      excerpt: "resumo",
+      slug: "titulo",
+      titulo: "Título gerado pela IA",
+      wpMediaId: null,
+    });
+    generateImage.mockResolvedValue({ base64: "AAAA", mimeType: "image/png" });
+    uploadMedia.mockResolvedValue({ id: 42, sourceUrl: "https://blog.test/img.png" });
+    createPost.mockResolvedValue({ id: 99, link: "https://blog.test/post" });
+    db.lineReferenceImage.findMany.mockResolvedValue([
+      { id: "ref-1", lineId: "line-1", storageUrl: "/api/uploads/ref1.jpg", ordem: 0, createdAt: new Date() },
+    ]);
+    storageRead.mockResolvedValue(Buffer.from("fake-image-bytes"));
+  }
+
+  it("iaImagem=OPENROUTER: carrega e envia as imagens de referência cadastradas (registry declara suportaImagensReferencia)", async () => {
+    db.productionLine.findUnique.mockResolvedValue({ ...BASE_LINE, iaImagem: "OPENROUTER" });
+    setUpArticleForImageGeneration();
+
+    await runProductionLine(fakeRedis as never, "line-1", noopLog);
+
+    expect(generateImage).toHaveBeenCalledTimes(1);
+    expect(storageRead).toHaveBeenCalledTimes(1);
+    const [{ referenceImages }] = generateImage.mock.calls[0] as [{ referenceImages?: { base64: string; mimeType: string }[] }];
+    expect(referenceImages).toHaveLength(1);
+    expect(referenceImages![0]).toEqual({ base64: Buffer.from("fake-image-bytes").toString("base64"), mimeType: "image/jpeg" });
+  });
+
+  it("iaImagem=OPENAI (sem suporte a imagens de referência no registry): não carrega do storage e envia referenceImages undefined", async () => {
+    db.productionLine.findUnique.mockResolvedValue({ ...BASE_LINE, iaImagem: "OPENAI" });
+    setUpArticleForImageGeneration();
+
+    await runProductionLine(fakeRedis as never, "line-1", noopLog);
+
+    expect(generateImage).toHaveBeenCalledTimes(1);
+    const [{ referenceImages }] = generateImage.mock.calls[0] as [{ referenceImages?: unknown[] }];
+    expect(referenceImages).toBeUndefined();
+    expect(storageRead).not.toHaveBeenCalled();
+  });
+
+  it("iaImagem=GEMINI: continua carregando e enviando as imagens de referência (comportamento anterior preservado)", async () => {
+    db.productionLine.findUnique.mockResolvedValue({ ...BASE_LINE, iaImagem: "GEMINI" });
+    setUpArticleForImageGeneration();
+
+    await runProductionLine(fakeRedis as never, "line-1", noopLog);
+
+    expect(generateImage).toHaveBeenCalledTimes(1);
+    const [{ referenceImages }] = generateImage.mock.calls[0] as [{ referenceImages?: unknown[] }];
+    expect(referenceImages).toHaveLength(1);
+    expect(referenceImages![0]).toMatchObject({ mimeType: "image/jpeg" });
+  });
 });
 
 describe("runProductionLine — máximo atingido", () => {
