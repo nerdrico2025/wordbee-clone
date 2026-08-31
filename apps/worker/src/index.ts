@@ -3,6 +3,7 @@ import { prisma } from "@wordbee/db";
 import { recordHeartbeat } from "@wordbee/shared";
 import { createRedisConnection } from "./redis.js";
 import { startLineScheduler } from "./line-scheduler.js";
+import { startDistributionScheduler } from "./distribution-scheduler.js";
 import { startHeartbeatLog } from "./heartbeat-log.js";
 
 // Era 30s (SET no Redis a cada 30s = ~86 mil comandos/mês, só disso, 24/7).
@@ -39,13 +40,19 @@ async function main() {
   const scheduler = startLineScheduler(redis, WORKER_INSTANCE_ID);
   console.log("[worker] Scheduler de Linhas de Produção (cron+Postgres) pronto.");
 
+  // Segundo scheduler, independente do primeiro: uma falha na distribuição
+  // (Facebook fora do ar, token expirado) nunca pode atrasar a publicação
+  // dos artigos, que é a função principal do produto.
+  const distributionScheduler = startDistributionScheduler(redis, WORKER_INSTANCE_ID);
+  console.log("[worker] Scheduler de Distribuição (Páginas do Facebook) pronto.");
+
   const logHeartbeatTimer = startHeartbeatLog(WORKER_INSTANCE_ID);
 
   const shutdown = async () => {
     console.log("[worker] Encerrando...");
     clearInterval(heartbeatTimer);
     clearInterval(logHeartbeatTimer);
-    await scheduler.stop();
+    await Promise.all([scheduler.stop(), distributionScheduler.stop()]);
     await redis.quit();
     await prisma.$disconnect();
     process.exit(0);

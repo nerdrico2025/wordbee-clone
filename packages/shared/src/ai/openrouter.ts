@@ -2,13 +2,17 @@ import { AI_MODELS } from "./models.js";
 import { fetchJsonOrThrow, fetchStreamedTextOrThrow, fetchWithTimeout, parseJsonArrayResponse, parseJsonObjectResponse } from "./http.js";
 import { AiProviderError, classifyHttpError } from "./errors.js";
 import { buildArticleSystemPrompt, buildTitleSuggestionPrompt } from "../prompts/common.js";
+import { buildDistributionCopySystemPrompt, buildDistributionCopyUserPrompt } from "../prompts/distribution.js";
 import { ARTICLE_TYPE_PROMPTS } from "../prompts/article-types/index.js";
 import { slugify } from "../slugify.js";
+import { parseDistributionCopyResponse } from "./distribution-copy.js";
 import type {
   GenerateArticleInput,
+  GenerateDistributionCopyInput,
   GenerateImageInput,
   GenerateTitlesInput,
   GeneratedArticle,
+  GeneratedDistributionCopy,
   GeneratedImage,
   ImageProvider,
   TextProvider,
@@ -26,7 +30,7 @@ const EXTRA_HEADERS = {
   "X-Title": "Wordbee Clone",
 };
 
-type OpenRouterCallTipo = "titulo" | "artigo" | "imagem";
+type OpenRouterCallTipo = "titulo" | "artigo" | "imagem" | "copy_distribuicao";
 type OpenRouterCallModo = "stream" | "sync";
 
 /**
@@ -64,7 +68,12 @@ function logOpenRouterCall(tipo: OpenRouterCallTipo, modo: OpenRouterCallModo, s
  * segue recebendo texto aos poucos nunca esbarra nele, não importa quanto
  * tempo total leve. Ver DECISIONS.md.
  */
-async function chatCompletion(apiKey: string, systemPrompt: string, userPrompt: string, tipo: "titulo" | "artigo"): Promise<string> {
+async function chatCompletion(
+  apiKey: string,
+  systemPrompt: string,
+  userPrompt: string,
+  tipo: "titulo" | "artigo" | "copy_distribuicao"
+): Promise<string> {
   const startedAt = Date.now();
   try {
     const content = await fetchStreamedTextOrThrow(PROVIDER, `${BASE_URL}/chat/completions`, {
@@ -117,6 +126,16 @@ Não use markdown nem texto fora do JSON.`;
         metaTitle: parsed.metaTitle,
         slug: slugify(titulo),
       };
+    },
+
+    async generateDistributionCopy(input: GenerateDistributionCopyInput): Promise<GeneratedDistributionCopy[]> {
+      const content = await chatCompletion(
+        apiKey,
+        buildDistributionCopySystemPrompt(input),
+        buildDistributionCopyUserPrompt(input),
+        "copy_distribuicao"
+      );
+      return parseDistributionCopyResponse(content, PROVIDER);
     },
   };
 }

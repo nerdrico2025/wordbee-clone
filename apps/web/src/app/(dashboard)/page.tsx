@@ -1,10 +1,24 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
-import { FileText, Globe, TrendingUp, PenSquare, KeyRound, History, ExternalLink, AlertTriangle, Circle } from "lucide-react";
+import {
+  FileText,
+  Globe,
+  TrendingUp,
+  PenSquare,
+  KeyRound,
+  History,
+  ExternalLink,
+  AlertTriangle,
+  Circle,
+  ListChecks,
+  Facebook,
+  MousePointerClick,
+} from "lucide-react";
 import { prisma } from "@wordbee/db";
 import { getWorkerHealth } from "@wordbee/shared";
 import { getCurrentSession } from "@/lib/auth";
 import { getRedis } from "@/lib/redis";
+import { hojeIsoDate, toDataPrevista } from "@/lib/distribution";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { Card, CardContent } from "@/components/ui/Card";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -26,7 +40,27 @@ export default async function DashboardPage() {
   const inicioMes = startOfMonth();
   const em24h = new Date(Date.now() + 24 * 60 * 60 * 1000);
 
-  const [totalPublicados, publicadosMes, sitesCount, agendados24h, linhasAtivas, apiKeysCount, ultimosArtigos, linhasComAlerta] = await Promise.all([
+  // Distribuição: só os números que fazem alguém agir hoje (o detalhamento
+  // vive no Painel de Distribuição). Sem nada configurado, o bloco some.
+  const hoje = toDataPrevista(hojeIsoDate());
+  const sete = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+
+  const [
+    totalPublicados,
+    publicadosMes,
+    sitesCount,
+    agendados24h,
+    linhasAtivas,
+    apiKeysCount,
+    ultimosArtigos,
+    linhasComAlerta,
+    filaPendentesHoje,
+    filaTotalHoje,
+    publicacoesPaginas7d,
+    paginasComTokenInvalido,
+    cliquesLinks,
+    temDistribuicaoConfigurada,
+  ] = await Promise.all([
     prisma.article.count({ where: { userId, status: "PUBLICADO" } }),
     prisma.article.count({ where: { userId, status: "PUBLICADO", publishedAt: { gte: inicioMes } } }),
     prisma.wpSite.count({ where: { userId } }),
@@ -43,6 +77,16 @@ export default async function DashboardPage() {
       where: { userId, status: "PAUSADA", consecutiveFailures: { gte: 5 } },
       select: { id: true, nome: true, pauseReason: true },
     }),
+    prisma.filaDistribuicaoManual.count({ where: { userId, dataPrevista: hoje, status: "PENDENTE" } }),
+    prisma.filaDistribuicaoManual.count({ where: { userId, dataPrevista: hoje } }),
+    prisma.pageDistributionPost.count({
+      where: { package: { userId }, status: "PUBLICADO", publishedAt: { gte: sete } },
+    }),
+    prisma.facebookPage.count({ where: { userId, statusValidacao: false } }),
+    prisma.distributionLink.aggregate({ where: { userId }, _sum: { cliqueCount: true } }),
+    prisma.facebookPage.count({ where: { userId } }).then(async (paginas) =>
+      paginas > 0 ? true : (await prisma.divulgacaoPerfil.count({ where: { userId } })) > 0
+    ),
   ]);
 
   const workerHealth = await getWorkerHealth(getRedis()).catch(() => ({ online: false, lastSuccessAt: null }));
@@ -99,6 +143,70 @@ export default async function DashboardPage() {
         <MetricCard icon={TrendingUp} label="Publicados este mês" value={publicadosMes} />
         <MetricCard icon={Globe} label="Sites cadastrados" value={sitesCount} />
       </div>
+
+      {temDistribuicaoConfigurada && (
+        <Card className="mt-6">
+          <CardContent>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <h2 className="text-sm font-semibold text-zinc-900 dark:text-white">Distribuição</h2>
+              <Link
+                href="/painel-de-distribuicao"
+                className="text-sm font-medium text-primary-600 hover:underline dark:text-primary-300"
+              >
+                Ver painel completo →
+              </Link>
+            </div>
+
+            {paginasComTokenInvalido > 0 && (
+              <p className="mt-3 flex items-start gap-1.5 rounded-lg bg-red-50 p-2 text-xs text-red-700 dark:bg-red-500/10 dark:text-red-400">
+                <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                {paginasComTokenInvalido === 1
+                  ? "1 Página está com o token inválido e parou de publicar."
+                  : `${paginasComTokenInvalido} Páginas estão com o token inválido e pararam de publicar.`}{" "}
+                <Link href="/paginas-facebook" className="underline hover:no-underline">
+                  Atualizar token
+                </Link>
+              </p>
+            )}
+
+            <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-3">
+              <Link href="/fila-de-distribuicao" className="group flex items-center gap-3">
+                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-primary-100 text-primary-700 dark:bg-primary-500/10 dark:text-primary-300">
+                  <ListChecks className="h-5 w-5" />
+                </div>
+                <div>
+                  <p className="text-2xl font-bold text-zinc-900 group-hover:text-primary-600 dark:text-white">
+                    {filaPendentesHoje}
+                  </p>
+                  <p className="text-sm text-zinc-500 dark:text-zinc-400">
+                    {filaTotalHoje === 0 ? "Nada na fila hoje" : `pendente(s) de ${filaTotalHoje} hoje`}
+                  </p>
+                </div>
+              </Link>
+
+              <div className="flex items-center gap-3">
+                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-primary-100 text-primary-700 dark:bg-primary-500/10 dark:text-primary-300">
+                  <Facebook className="h-5 w-5" />
+                </div>
+                <div>
+                  <p className="text-2xl font-bold text-zinc-900 dark:text-white">{publicacoesPaginas7d}</p>
+                  <p className="text-sm text-zinc-500 dark:text-zinc-400">em Páginas (7 dias)</p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-3">
+                <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-primary-100 text-primary-700 dark:bg-primary-500/10 dark:text-primary-300">
+                  <MousePointerClick className="h-5 w-5" />
+                </div>
+                <div>
+                  <p className="text-2xl font-bold text-zinc-900 dark:text-white">{cliquesLinks._sum.cliqueCount ?? 0}</p>
+                  <p className="text-sm text-zinc-500 dark:text-zinc-400">cliques rastreados</p>
+                </div>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       <div className="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-3">
         <Card className="lg:col-span-1">

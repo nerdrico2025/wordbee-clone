@@ -343,6 +343,131 @@ A primeira versão da query de reivindicação nunca encontrava nenhuma linha de
 - `line-pipeline.test.ts` (existente) só perdeu as referências a `scheduleLineRun` (que não existe mais) — todos os cenários de negócio pedidos (máximo atingido, rate limit, retry+backoff, 5 falhas consecutivas, duplicidade/idempotência) continuam cobertos, sem mudança de lógica.
 - `npm run typecheck`, `npm run lint`, `npm run build` e `vitest run` (106 testes) verdes.
 
+## ✅ Distribuição — PROMPT 1: trilho automático em Páginas do Facebook (concluído em 2026-08-31)
+
+Primeira das três etapas de `plano-acao-claude-code-distribuicao.md`. Adiciona **distribuição** dos artigos publicados: levar tráfego do blog até a audiência, publicando automaticamente nas Páginas do Facebook do dono pela Graph API oficial.
+
+### ⛔ Fronteira de escopo (permanente, não é pendência)
+
+Nada de automação de navegador/sessão de conta pessoal (ixBrowser, Plubie ou equivalente próprio) e nada de publicação automatizada em **Grupos** — a API de Grupos foi descontinuada pela Meta e todo caminho não-oficial usa automação de conta pessoal, que põe contas reais de pessoas reais em risco de banimento. Grupos e perfis pessoais são atendidos pelo **trilho assistido** (PROMPT 2): o app organiza o trabalho, a publicação é um clique humano. Justificativa completa em DECISIONS.md, "Distribuição de conteúdo — PROMPT 1".
+
+### O que foi entregue
+
+**Modelo de dados** (migração `20260831140000_add_distribution_facebook_pages`, só adições):
+- `facebook_pages` — Página cadastrada, com token criptografado (AES-256-GCM, mesmo padrão de `api_keys`/`wp_sites`), validação, e vínculo opcional a um blog.
+- `distribution_packages` — pacote gerado a partir de um artigo: imagem(ns), copy de descrição, copy de comentário, tipo (`CAPTACAO`/`DIRETO_SITE`) e link de destino.
+- `page_distribution_posts` — uma publicação agendada por Página, com status, ids do Facebook, tentativas e lock de execução.
+
+**Cliente da Graph API** (`packages/shared/src/facebook/`): publicar foto/link em Página, comentar no post criado e validar token — no mesmo molde do cliente WordPress (`undici` explícito, timeout cobrindo fetch **e** leitura do corpo, retry só para falhas transitórias, erros normalizados com mensagem em português). Classificação de erro pelo `code` numérico do corpo, não pelo status HTTP (a Graph API devolve 400 para causas completamente diferentes).
+
+**Tela "Páginas do Facebook"** (novo item de menu): CRUD com token mascarado após salvo e nunca devolvido em texto puro, botão "Testar conexão", vínculo opcional a um blog, e um aviso no topo explicando que só Páginas são automatizadas. O token é **validado contra o Facebook antes de ser gravado** — credencial inválida nunca é persistida (mesma regra do RF-15 das chaves de IA).
+
+**Geração e publicação automáticas** (worker, `startDistributionScheduler`, tick de 2min): a cada tick, (1) varre artigos publicados recentemente sem pacote e enfileira, (2) monta os pacotes pendentes gerando as copies via IA sob o semáforo `provider-slot`, (3) publica nas Páginas cujo horário agendado venceu — post com a imagem + primeiro comentário com o link. Reivindicação atômica com `FOR UPDATE SKIP LOCKED`, igual ao scheduler de Linhas. Publicações do mesmo pacote são espaçadas com jitter, nunca disparadas no mesmo segundo.
+
+### Decisões de implementação que valem saber
+
+- **A geração do pacote roda no worker**, não dentro do pipeline de publicação do artigo: a geração unitária roda em função serverless com timeout apertado, e somar duas chamadas de IA ali arriscaria cortar a publicação do artigo. Um caminho só cobre artigo de Linha e artigo manual.
+- **Guarda contra varrer o histórico**: só artigos publicados nas últimas 6h (configurável) e só se houver Página elegível — sem Página cadastrada, zero custo de IA.
+- **O link nunca é escrito pelo modelo**: a copy é gerada por IA, mas a URL é anexada pelo código, e o parser rejeita copy que venha com link no texto.
+- **A imagem reaproveita a do artigo** (já hospedada no WordPress), então nada de novo passa a depender do storage local — o ponto frágil conhecido do projeto.
+- **Token expirado invalida a Página**, que sai da fila de agendamento até o usuário testar/atualizar o token — em vez de empilhar publicações fadadas a falhar.
+- **Retomada parcial**: o id do post é gravado antes de comentar, então uma retentativa nunca republica (só termina o comentário).
+
+### Testes
+
+45 testes novos: 15 do cliente Graph API (mockado, sem tocar a API real), 11 da montagem de pacote, 12 do pipeline de publicação, 7 do parser de copy. `npm run typecheck`, `npm run lint`, `npm run build` e `npm test` (159 testes) verdes.
+
+### ⚠️ Pendente de validação real
+
+A publicação de ponta a ponta contra uma Página de verdade **ainda não foi validada** — depende do Page ID e do token de Página que o Rafael vai gerar. Até lá, todo o caminho está coberto por testes com o cliente Graph API mockado, como o próprio PROMPT 1 instruiu.
+
+## ✅ Distribuição — PROMPT 2: trilho assistido (grupos e perfis) (concluído em 2026-08-31)
+
+Segunda das três etapas de `plano-acao-claude-code-distribuicao.md`. Onde o PROMPT 1 automatizou o que é automatizável (Páginas via Graph API), este organiza o que **não** é: a postagem em grupos, feita à mão por pessoas reais.
+
+### ⛔ Fronteira de escopo (a mesma, e é aqui que ela mais tenta ser furada)
+
+Nada aqui automatiza a ação de postar. Não existe — e não deve nascer como "melhoria de usabilidade" — botão que abra o Facebook preenchido via script, atalho que dispare postagem no navegador, nem campo que guarde login/senha/cookie de conta pessoal. `divulgacao_perfis` guarda **um nome e uma observação**: é agenda, não acesso. O único efeito do app sobre este trilho é *anotar* o que a pessoa fez. Justificativa completa em DECISIONS.md.
+
+### O que foi entregue
+
+**Modelo de dados** (migração `20260831180000_add_distribuicao_trilho_assistido`, só adições):
+- `divulgacao_perfis` — as pessoas reais que ajudam (nome, observações, ativo).
+- `grupos_parceiros` — grupo com acordo comercial: link, administrador, valor (em centavos), vigência, nº de membros, status, e a confirmação de que **o dono avisa aos membros que é parceria**.
+- `perfil_grupo` (N:N) — quem está em qual grupo, com situação (aguardando/aprovado/entrou/removido).
+- `fila_distribuicao_manual` — "no dia X, a pessoa P posta o pacote K no grupo G".
+- `distribution_links` — link curto rastreado por combinação pacote × perfil × grupo.
+- `distribution_packages` ganhou `copy_variacoes` (Json) e `imagens_alvo`.
+
+**Telas novas** (menu reorganizado em Produção / Distribuição / Configuração — 12 itens numa lista corrida ficaria impossível de navegar):
+- **Perfis de Divulgação** — CRUD, ativar/desativar, contagem de grupos.
+- **Grupos Parceiros** — CRUD completo + gestão de quais perfis estão em cada grupo, com aviso visível quando o dono ainda não confirmou que divulga a parceria aos membros.
+- **Pacotes de Distribuição** — lista os pacotes (dos dois trilhos), mostra imagens e as duas copies com botão de copiar, permite trocar entre as variações de texto sem gastar IA, e criar pacote manualmente a partir de um artigo publicado.
+- **Fila de Distribuição** (tela principal deste trilho) — o dia agrupado por pessoa, cada item com a imagem, o texto do post e o comentário **já com o link curto daquela combinação**, botões de copiar separados, e "Marcar como postado" / "Pular hoje". Filtros por dia, pessoa, grupo e status.
+
+**Links rastreados** — `GET /r/{código}` (única rota pública além do login): conta o clique e redireciona 302. Permite ver, por perfil e por grupo, quantos cliques cada divulgação gerou.
+
+**Tipo de pacote CAPTACAO vs DIRETO_SITE** — DIRETO_SITE (comentário leva à busca do blog pelo tema) só fica disponível quando o tema já tem 3+ artigos publicados, calculado no próprio banco. Mandar tráfego para uma busca com um artigo só entrega página quase vazia.
+
+**Álbum de imagens** — o pacote pode ter até 6 imagens; as que faltam são geradas pelo ImageProvider com enquadramentos variados e **enviadas como mídia para o WordPress do artigo**, que é onde elas ganham a URL pública que os dois trilhos precisam.
+
+**Variações de copy** — 2-3 opções geradas numa única chamada de IA, guardadas cruas (sem link); trocar a ativa reanexa o link certo.
+
+### Decisões de implementação que valem saber
+
+- **A regra "não repetir o mesmo perfil no mesmo grupo no mesmo dia" é UNIQUE no banco**, não só validação de aplicação — validação sozinha não resiste a duas requisições concorrentes, e furar essa regra por acidente custa a conta de um familiar.
+- **A fila trabalha no fuso do usuário** (`APP_TIMEZONE`, padrão America/Sao_Paulo): com UTC, o dia viraria às 21h de Brasília e a fila mudaria embaixo de quem está trabalhando.
+- **O pacote agora nasce também quando não há Página cadastrada**, desde que exista perfil de divulgação ativo — ele é matéria-prima da fila manual tanto quanto da publicação automática.
+- **Álbum vai para o WordPress, não para o storage local** — evita depender do ponto frágil conhecido do projeto (sem driver S3, web e worker em hosts diferentes).
+- **Artigo sem imagem destacada agora gera uma imagem** em vez de virar post de link (post com foto rende muito mais nessa estratégia).
+- Excluir perfil/grupo apaga o histórico junto (cascade); a UI sugere **desativar** o perfil ou **encerrar** a parceria, que preservam o histórico.
+- **Item 5 do plano (captação exploratória) ficou de fora**, como combinado — não foi implementado nenhum fluxo de pacote sem artigo.
+
+### Testes
+
+59 testes novos (219 no total, 22 arquivos): regras da fila (perfil inativo, parceria encerrada, pessoa fora do grupo, repetição no mesmo dia, resultado parcial), fuso da fila, links (reuso da combinação, corrida, código sem caracteres ambíguos), troca de variação, rota `/r/:code` (contagem, código inexistente, open redirect, falha do banco não impedindo a visita), álbum e DIRETO_SITE no worker, e o parser de variações. `npm run typecheck`, `npm run lint`, `npm run build` e `npm test` verdes.
+
+### ⚠️ Pendente de validação real
+
+Validação de ponta a ponta com dados reais (Página do Facebook, grupos, familiares postando) **segue adiada por decisão do Rafael para o fim de todo o trabalho de distribuição, em produção** — é sequência combinada, não pendência esquecida.
+
+## ✅ Distribuição — PROMPT 3: painel, robustez e documentação (concluído em 2026-08-31)
+
+Última das três etapas de `plano-acao-claude-code-distribuicao.md`. Fecha a feature de distribuição.
+
+### 🔒 Bug real de segurança encontrado e corrigido na auditoria
+
+O prompt pedia para **confirmar** que o token de Página nunca aparece em texto puro em log ou resposta. O armazenamento estava certo (AES-256-GCM, só a máscara sai em resposta), mas a auditoria achou um caminho real de vazamento: `validatePageToken` mandava o token na **query string**, e mensagens de erro de rede podem embutir a URL chamada — mensagem que vira `facebook_pages.last_error` no Postgres e linha de log no EasyPanel.
+
+Corrigido em duas camadas: token agora vai no header `Authorization: Bearer` (nenhum caminho do código põe token em URL), mais `redactTokens()` no construtor de `FacebookError` como rede de segurança. 7 testes novos fixam isso.
+
+### Painel de Distribuição
+
+**Página dedicada** (`/painel-de-distribuicao`, primeiro item do menu Distribuição):
+- publicações por Página nos últimos 7 dias — sucessos, falhas, agendadas, com aviso de token inválido e o último erro;
+- fila de hoje (concluídas de total, pendentes, puladas);
+- **cliques por grupo parceiro e por perfil**, com barra proporcional — a pergunta que decide se vale renovar uma parceria;
+- **capacidade da estrutura atual** (pacotes/dia × perfis ativos × grupos por perfil) comparada ao realizado.
+
+**Bloco no Dashboard principal**: só o que faz agir hoje — pendentes na fila, publicações em Páginas (7 dias), cliques totais, e alerta destacado se alguma Página está com token inválido. Some inteiro quando não há Página nem perfil cadastrado.
+
+A projeção é apresentada como **teto da estrutura, não meta**: só conta perfis ativos já dentro de grupos com parceria ativa, mostra sempre o realizado ao lado, e traz aviso explícito de que forçar o teto é o que faz um perfil real ser sinalizado como spam.
+
+### Robustez
+
+- **Loading/erro**: já cobertos por `loading.tsx`/`error.tsx` no nível do grupo `(dashboard)` — vale para toda a árvore, nenhuma tela nova precisou de arquivo próprio.
+- **Estados vazios**: todas as telas novas já tinham, com CTA apontando para o passo anterior do fluxo.
+- **Revalidação (isto faltava)**: Perfis, Grupos e Páginas do Facebook só atualizavam estado local — desativar um perfil e ir para "Distribuir nos grupos" mostrava ele ainda disponível, por causa do Router Cache do Next. Adicionado `router.refresh()` nas mutações das três telas.
+
+### Documentação
+
+- **README** ganhou a seção **"Distribuição: levar os artigos até as pessoas"**: tabela comparando os dois trilhos, passo a passo para obter ID e token de Página (incluindo como estender o token de 1h para ~60 dias), como cadastrar perfis e grupos parceiros, como criar e distribuir um pacote, o fluxo do dia a dia na fila (copiar → postar → marcar) e como ler o painel.
+- **DECISIONS.md** ganhou, **no topo do arquivo e fora da cronologia**, a seção **"⛔ Decisão permanente de escopo"** — o que está vetado, por quê, o que é automatizado no lugar, as formas disfarçadas do mesmo mecanismo (botão que preenche o Facebook, atalho, bookmarklet, guardar sessão), e o mapa de onde essa fronteira está marcada no código.
+
+### Testes
+
+12 testes novos (231 no total, 24 arquivos): redação de token em mensagens de erro, token no header e não na URL, e a aritmética da projeção (divisão por zero, realizado acima do teto, arredondamento). `npm run typecheck`, `npm run lint`, `npm run build` e `npm test` verdes.
+
 ## Como rodar localmente
 
 ```bash

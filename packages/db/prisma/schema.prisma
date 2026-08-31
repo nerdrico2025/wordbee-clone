@@ -80,6 +80,61 @@ enum RateLimitBehavior {
   PAUSAR
 }
 
+/// Tipo/destino de um pacote de distribuição (ver
+/// distribuicao-wordbee-especificacao.md, Aula 4): CAPTACAO leva a pessoa
+/// para a landing page/grupo de WhatsApp; DIRETO_SITE leva para o blog.
+/// Só CAPTACAO é gerado automaticamente hoje (PROMPT 1) — DIRETO_SITE
+/// existe no enum porque o trilho assistido (PROMPT 2) o usa.
+enum DistributionPackageType {
+  CAPTACAO
+  DIRETO_SITE
+}
+
+/// Ciclo de vida da montagem de um pacote. A linha nasce PENDENTE (barata,
+/// sem nenhuma chamada de IA) e só depois é reivindicada pelo worker, que
+/// gera as copies e a marca PRONTO — mesmo desenho de "cria o registro
+/// primeiro, processa depois" já usado em `articles`.
+enum DistributionPackageStatus {
+  PENDENTE
+  PRONTO
+  FALHA
+}
+
+/// Estado de uma publicação agendada numa Página do Facebook.
+/// AGENDADO = aguardando `scheduledFor`; PENDENTE = nova tentativa marcada
+/// depois de uma falha transitória (ambos são reivindicáveis pelo worker
+/// quando `scheduledFor` vence).
+enum PageDistributionStatus {
+  PENDENTE
+  AGENDADO
+  PUBLICADO
+  FALHA
+}
+
+/// Vigência do acordo comercial com o dono de um grupo parceiro.
+enum GrupoParceiroStatus {
+  ATIVO
+  PAUSADO
+  ENCERRADO
+}
+
+/// Situação de um perfil de divulgação dentro de um grupo parceiro.
+enum PerfilGrupoStatus {
+  AGUARDANDO_APROVACAO
+  APROVADO
+  ENTROU
+  REMOVIDO
+}
+
+/// Situação de um item da fila de distribuição manual. PULADO existe para o
+/// dia em que a pessoa decidiu não postar — é informação real de cadência,
+/// diferente de "ainda não fez".
+enum FilaDistribuicaoStatus {
+  PENDENTE
+  POSTADO
+  PULADO
+}
+
 // ---------------------------------------------------------------------------
 // Models
 // ---------------------------------------------------------------------------
@@ -95,11 +150,17 @@ model User {
   createdAt    DateTime @default(now()) @map("created_at")
   updatedAt    DateTime @updatedAt @map("updated_at")
 
-  apiKeys         ApiKey[]
-  wpSites         WpSite[]
-  productionLines ProductionLine[]
-  articles        Article[]
-  sessions        Session[]
+  apiKeys              ApiKey[]
+  wpSites              WpSite[]
+  productionLines      ProductionLine[]
+  articles             Article[]
+  sessions             Session[]
+  facebookPages        FacebookPage[]
+  distributionPackages DistributionPackage[]
+  divulgacaoPerfis     DivulgacaoPerfil[]
+  gruposParceiros      GrupoParceiro[]
+  filaDistribuicao     FilaDistribuicaoManual[]
+  distributionLinks    DistributionLink[]
 
   @@map("users")
 }
@@ -161,6 +222,7 @@ model WpSite {
   user            User             @relation(fields: [userId], references: [id], onDelete: Cascade)
   productionLines ProductionLine[]
   articles        Article[]
+  facebookPages   FacebookPage[]
 
   @@index([userId])
   @@map("wp_sites")
@@ -270,13 +332,286 @@ model Article {
   updatedAt    DateTime      @updatedAt @map("updated_at")
   publishedAt  DateTime?     @map("published_at")
 
-  user       User            @relation(fields: [userId], references: [id], onDelete: Cascade)
-  line       ProductionLine? @relation(fields: [lineId], references: [id], onDelete: SetNull)
-  wpSite     WpSite          @relation(fields: [wpSiteId], references: [id], onDelete: Restrict)
-  titleQueue TitleQueueItem? @relation(fields: [titleQueueId], references: [id], onDelete: SetNull)
+  user                 User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  line                 ProductionLine?       @relation(fields: [lineId], references: [id], onDelete: SetNull)
+  wpSite               WpSite                @relation(fields: [wpSiteId], references: [id], onDelete: Restrict)
+  titleQueue           TitleQueueItem?       @relation(fields: [titleQueueId], references: [id], onDelete: SetNull)
+  distributionPackages DistributionPackage[]
 
   @@index([createdAt])
   @@index([lineId, createdAt])
   @@index([userId, status])
   @@map("articles")
+}
+
+// ---------------------------------------------------------------------------
+// Distribuição — trilho automático (Páginas do Facebook via Graph API)
+//
+// Limite de escopo permanente (ver plano-acao-claude-code-distribuicao.md,
+// seção "Limite de escopo", e DECISIONS.md 2026-08-31): a ÚNICA publicação
+// automatizada que este projeto faz no Facebook é em PÁGINAS, via Graph API
+// oficial com token de Página. Não há — e não deve haver — nenhum modelo,
+// coluna ou código para publicar em Grupos ou perfis pessoais de forma
+// automatizada. Grupos/perfis pessoais são atendidos pelo trilho assistido
+// (organização de trabalho humano), nunca por automação de sessão/navegador.
+// ---------------------------------------------------------------------------
+
+/// Página do Facebook administrada pelo dono, com token de Página
+/// criptografado no mesmo padrão AES-256-GCM de `api_keys`/`wp_sites`.
+model FacebookPage {
+  id                   String    @id @default(cuid())
+  userId               String    @map("user_id")
+  nome                 String
+  /// ID numérico da Página na Meta (não é o id interno desta tabela).
+  pageId               String    @map("page_id")
+  accessTokenEncrypted String    @map("access_token_encrypted")
+  iv                   String
+  authTag              String    @map("auth_tag")
+  maskedHint           String    @map("masked_hint")
+  statusValidacao      Boolean   @default(false) @map("status_validacao")
+  lastValidatedAt      DateTime? @map("last_validated_at")
+  lastError            String?   @map("last_error")
+  /// Vínculo opcional a um blog/nicho. Nulo = Página "global", elegível
+  /// para artigos de qualquer site.
+  wpSiteId             String?   @map("wp_site_id")
+  createdAt            DateTime  @default(now()) @map("created_at")
+  updatedAt            DateTime  @updatedAt @map("updated_at")
+
+  user              User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  wpSite            WpSite?                @relation(fields: [wpSiteId], references: [id], onDelete: SetNull)
+  distributionPosts PageDistributionPost[]
+
+  @@unique([userId, pageId])
+  @@index([userId])
+  @@map("facebook_pages")
+}
+
+/// Pacote de distribuição gerado a partir de um artigo publicado: imagem(ns)
+/// + copy de descrição + copy de comentário (onde vai o link).
+/// `articleId` é nulo em pacotes exploratórios sem artigo (PROMPT 2).
+model DistributionPackage {
+  id             String                    @id @default(cuid())
+  userId         String                    @map("user_id")
+  articleId      String?                   @map("article_id")
+  tipo           DistributionPackageType
+  status         DistributionPackageStatus @default(PENDENTE)
+  /// URLs públicas das imagens do pacote (hoje: a imagem destacada do
+  /// artigo já hospedada no WordPress). Array para suportar o formato
+  /// "álbum" do PROMPT 2 sem migração nova.
+  imagens        String[]
+  copyDescricao  String?                   @map("copy_descricao")
+  copyComentario String?                   @map("copy_comentario")
+  /// Variações de copy geradas junto (2-3 opções), guardadas CRUAS — sem o
+  /// link anexado. Trocar a variação ativa é copiar uma delas para
+  /// `copyDescricao`/`copyComentario`, reanexando o link na hora. Ver
+  /// `apps/web/src/lib/distribution.ts#aplicarVariacaoDeCopy`.
+  copyVariacoes  Json?                     @map("copy_variacoes")
+  /// Quantas imagens o pacote deve ter. 1 (padrão) reaproveita a imagem
+  /// destacada do artigo sem custo de IA; 2+ manda o worker gerar um álbum
+  /// de variações do mesmo tema via ImageProvider.
+  imagensAlvo    Int                       @default(1) @map("imagens_alvo")
+  /// URL que a copy de comentário aponta. Hoje é a URL do artigo; no
+  /// PROMPT 2 passa a poder ser um link rastreado/landing page.
+  linkDestino    String?                   @map("link_destino")
+  tentativas     Int                       @default(0)
+  erroMsg        String?                   @map("erro_msg")
+  lockedAt       DateTime?                 @map("locked_at")
+  lockedBy       String?                   @map("locked_by")
+  createdAt      DateTime                  @default(now()) @map("created_at")
+  updatedAt      DateTime                  @updatedAt @map("updated_at")
+
+  user      User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  article   Article?                 @relation(fields: [articleId], references: [id], onDelete: Cascade)
+  pagePosts PageDistributionPost[]
+  filaItens FilaDistribuicaoManual[]
+  links     DistributionLink[]
+
+  /// Garante no máximo um pacote de cada tipo por artigo — é a
+  /// idempotência da geração automática (o sweep pode rodar de novo sobre o
+  /// mesmo artigo sem duplicar). NULLs não colidem entre si no Postgres,
+  /// então pacotes exploratórios (articleId nulo) não são afetados.
+  @@unique([articleId, tipo])
+  @@index([status, createdAt])
+  @@map("distribution_packages")
+}
+
+/// Uma publicação agendada de um pacote numa Página do Facebook.
+model PageDistributionPost {
+  id             String                 @id @default(cuid())
+  packageId      String                 @map("package_id")
+  facebookPageId String                 @map("facebook_page_id")
+  status         PageDistributionStatus @default(AGENDADO)
+  /// ID do post criado na Página (formato "{pageId}_{postId}").
+  fbPostId       String?                @map("fb_post_id")
+  /// ID do primeiro comentário (onde vai o link) — nulo se o post foi
+  /// publicado mas o comentário falhou.
+  fbCommentId    String?                @map("fb_comment_id")
+  erroMsg        String?                @map("erro_msg")
+  tentativas     Int                    @default(0)
+  scheduledFor   DateTime               @map("scheduled_for")
+  publishedAt    DateTime?              @map("published_at")
+  lockedAt       DateTime?              @map("locked_at")
+  lockedBy       String?                @map("locked_by")
+  createdAt      DateTime               @default(now()) @map("created_at")
+  updatedAt      DateTime               @updatedAt @map("updated_at")
+
+  package DistributionPackage @relation(fields: [packageId], references: [id], onDelete: Cascade)
+  page    FacebookPage        @relation(fields: [facebookPageId], references: [id], onDelete: Cascade)
+
+  /// Idempotência: um pacote nunca gera duas publicações para a mesma Página.
+  @@unique([packageId, facebookPageId])
+  @@index([status, scheduledFor])
+  @@map("page_distribution_posts")
+}
+
+// ---------------------------------------------------------------------------
+// Distribuição — trilho ASSISTIDO (grupos e perfis pessoais)
+//
+// Este bloco é organização de trabalho HUMANO, e só isso. Nenhuma tabela
+// daqui guarda credencial de conta pessoal, sessão de navegador, cookie ou
+// qualquer coisa que permita agir em nome de uma pessoa: `divulgacao_perfis`
+// guarda apenas o NOME de um familiar/parceiro real, para o app saber a quem
+// atribuir cada tarefa do dia. A publicação em grupo é sempre um clique
+// humano real, feito pela própria pessoa, no navegador dela.
+//
+// Se uma sessão futura pensar em "só faltou automatizar a postagem no
+// grupo": a resposta está em DECISIONS.md, "Limite de escopo permanente" —
+// é decisão fechada, não pendência.
+// ---------------------------------------------------------------------------
+
+/// Pessoa real (familiar/parceiro) que ajuda na divulgação, postando
+/// manualmente nos grupos de que já participa. Não é uma "conta" do sistema
+/// nem uma credencial — é só um nome, para organizar a fila de trabalho.
+model DivulgacaoPerfil {
+  id          String   @id @default(cuid())
+  userId      String   @map("user_id")
+  nome        String
+  /// A quem pertence, nicho associado, combinados — texto livre.
+  observacoes String?
+  ativo       Boolean  @default(true)
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  user      User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  grupos    PerfilGrupo[]
+  filaItens FilaDistribuicaoManual[]
+  links     DistributionLink[]
+
+  @@index([userId])
+  @@map("divulgacao_perfis")
+}
+
+/// Grupo do Facebook com acordo comercial de parceria. Só entram aqui
+/// grupos em que há acordo com o dono — o app não tem (e não deve ganhar)
+/// nenhuma forma de descobrir ou postar em grupo sem isso.
+model GrupoParceiro {
+  id                         String              @id @default(cuid())
+  userId                     String              @map("user_id")
+  nome                       String
+  link                       String
+  /// Nome/contato do administrador do grupo (quem fechou a parceria).
+  adminContato               String?             @map("admin_contato")
+  /// Em centavos, não Decimal: evita `Prisma.Decimal` vazando para o
+  /// frontend (que não serializa em JSON) e o clássico erro de ponto
+  /// flutuante com dinheiro. 0 = parceria sem pagamento.
+  valorPagoCentavos          Int                 @default(0) @map("valor_pago_centavos")
+  periodoInicio              DateTime            @map("periodo_inicio")
+  periodoFim                 DateTime?           @map("periodo_fim")
+  /// O dono do grupo avisa aos membros que é uma parceria/publicidade.
+  /// É a condição que separa este modelo de spam disfarçado (CDC/CONAR) —
+  /// por isso está no cadastro, visível, e não implícita.
+  confirmaDivulgacaoParceria Boolean             @default(false) @map("confirma_divulgacao_parceria")
+  /// Nº aproximado de membros, informativo (para priorizar parcerias).
+  membrosAprox               Int?                @map("membros_aprox")
+  status                     GrupoParceiroStatus @default(ATIVO)
+  createdAt                  DateTime            @default(now()) @map("created_at")
+  updatedAt                  DateTime            @updatedAt @map("updated_at")
+
+  user      User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  perfis    PerfilGrupo[]
+  filaItens FilaDistribuicaoManual[]
+  links     DistributionLink[]
+
+  @@index([userId])
+  @@map("grupos_parceiros")
+}
+
+/// Quem está em qual grupo (N:N). Só uma combinação já dentro do grupo
+/// (APROVADO/ENTROU) pode entrar na fila de distribuição.
+model PerfilGrupo {
+  id                 String            @id @default(cuid())
+  divulgacaoPerfilId String            @map("divulgacao_perfil_id")
+  grupoParceiroId    String            @map("grupo_parceiro_id")
+  /// Nulo enquanto a entrada ainda não aconteceu (AGUARDANDO_APROVACAO).
+  dataEntrada        DateTime?         @map("data_entrada")
+  status             PerfilGrupoStatus @default(AGUARDANDO_APROVACAO)
+  createdAt          DateTime          @default(now()) @map("created_at")
+  updatedAt          DateTime          @updatedAt @map("updated_at")
+
+  perfil DivulgacaoPerfil @relation(fields: [divulgacaoPerfilId], references: [id], onDelete: Cascade)
+  grupo  GrupoParceiro    @relation(fields: [grupoParceiroId], references: [id], onDelete: Cascade)
+
+  @@unique([divulgacaoPerfilId, grupoParceiroId])
+  @@index([grupoParceiroId])
+  @@map("perfil_grupo")
+}
+
+/// Um item de trabalho: "no dia X, a pessoa P posta o pacote K no grupo G".
+/// O app organiza e registra; quem posta é a pessoa.
+model FilaDistribuicaoManual {
+  id                 String                 @id @default(cuid())
+  userId             String                 @map("user_id")
+  packageId          String                 @map("package_id")
+  divulgacaoPerfilId String                 @map("divulgacao_perfil_id")
+  grupoParceiroId    String                 @map("grupo_parceiro_id")
+  /// Data (sem hora — sempre meia-noite UTC), porque a regra de negócio e a
+  /// unique abaixo são por DIA, não por instante.
+  dataPrevista       DateTime               @map("data_prevista")
+  status             FilaDistribuicaoStatus @default(PENDENTE)
+  postadoEm          DateTime?              @map("postado_em")
+  observacao         String?
+  createdAt          DateTime               @default(now()) @map("created_at")
+  updatedAt          DateTime               @updatedAt @map("updated_at")
+
+  user    User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  package DistributionPackage @relation(fields: [packageId], references: [id], onDelete: Cascade)
+  perfil  DivulgacaoPerfil    @relation(fields: [divulgacaoPerfilId], references: [id], onDelete: Cascade)
+  grupo   GrupoParceiro       @relation(fields: [grupoParceiroId], references: [id], onDelete: Cascade)
+
+  /// A regra "não repetir o mesmo perfil no mesmo grupo no mesmo dia" (para
+  /// não parecer spam) é garantida AQUI, no banco — não só na validação da
+  /// aplicação, que pode ser contornada por uma requisição concorrente.
+  @@unique([divulgacaoPerfilId, grupoParceiroId, dataPrevista])
+  @@index([userId, dataPrevista, status])
+  @@index([packageId])
+  @@map("fila_distribuicao_manual")
+}
+
+/// Link curto rastreado por combinação pacote × perfil × grupo. Serve para
+/// medir qual parceria de grupo realmente converte, sem depender de UTM em
+/// domínio de terceiro.
+model DistributionLink {
+  id                 String    @id @default(cuid())
+  userId             String    @map("user_id")
+  packageId          String    @map("package_id")
+  divulgacaoPerfilId String?   @map("divulgacao_perfil_id")
+  grupoParceiroId    String?   @map("grupo_parceiro_id")
+  /// Código curto que aparece na URL pública (`/r/{code}`).
+  code               String    @unique
+  destinoUrl         String    @map("destino_url")
+  cliqueCount        Int       @default(0) @map("clique_count")
+  ultimoCliqueEm     DateTime? @map("ultimo_clique_em")
+  createdAt          DateTime  @default(now()) @map("created_at")
+
+  user    User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  package DistributionPackage @relation(fields: [packageId], references: [id], onDelete: Cascade)
+  perfil  DivulgacaoPerfil?   @relation(fields: [divulgacaoPerfilId], references: [id], onDelete: SetNull)
+  grupo   GrupoParceiro?      @relation(fields: [grupoParceiroId], references: [id], onDelete: SetNull)
+
+  /// A mesma combinação reusa sempre o mesmo código, mesmo que entre na
+  /// fila em dias diferentes — senão os cliques daquele grupo/perfil
+  /// ficariam espalhados por vários links e a métrica perderia sentido.
+  @@unique([packageId, divulgacaoPerfilId, grupoParceiroId])
+  @@index([packageId])
+  @@map("distribution_links")
 }

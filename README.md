@@ -14,6 +14,7 @@ Aplicação web de uso pessoal para gerar e publicar artigos no WordPress automa
 - [Como obter cada chave de IA](#como-obter-cada-chave-de-ia)
 - [Como gerar a senha de aplicação no WordPress](#como-gerar-a-senha-de-aplicação-no-wordpress)
 - [Como usar: sites, chaves, artigos e linhas de produção](#como-usar)
+- [Distribuição: levar os artigos até as pessoas](#distribuição-levar-os-artigos-até-as-pessoas)
 - [Deploy: EasyPanel (worker) + Neon (Postgres) + Upstash (Redis)](#deploy-easypanel-worker--neon-postgres--upstash-redis)
 - [Deploy no VPS sem EasyPanel (fallback)](#deploy-no-vps-sem-easypanel-fallback)
 - [Backup e restauração do banco](#backup-e-restauração-do-banco)
@@ -124,6 +125,133 @@ Cole a chave na tela **Chaves de API** do app (aba "IAs para Artigos" ou "IAs pa
 
 Rode `npm run dev:worker` (dev) ou `docker compose -f docker-compose.prod.yml logs -f worker` (produção) — cada execução de linha imprime uma linha de log estruturada (JSON) por evento: título gerado, conteúdo, imagem, publicado, falha, rate limit, com a duração total do "tick" ao final.
 
+## Distribuição: levar os artigos até as pessoas
+
+Publicar o artigo é metade do trabalho; a outra metade é alguém chegar até ele. O módulo de Distribuição pega cada artigo publicado e monta um **pacote** (imagem + texto do post + texto do primeiro comentário, com o link), que segue por dois caminhos:
+
+| | Trilho automático | Trilho assistido |
+|---|---|---|
+| Onde | **Páginas** do Facebook que você administra | **Grupos** do Facebook e perfis pessoais |
+| Como | O worker publica sozinho, pela API oficial da Meta | O app monta a fila do dia; **uma pessoa real posta à mão** |
+| Por quê | Existe API oficial e sancionada para Páginas | A API de Grupos foi descontinuada pela Meta em 2024 |
+
+> **Por que o app não posta em grupos sozinho.** Não existe caminho oficial, e todo caminho não-oficial (Plubie, ixBrowser e equivalentes) automatiza a **sessão de navegador de uma conta pessoal** — o que viola os Termos da Meta e põe em risco de banimento a conta real de uma pessoa real. Essa decisão é **definitiva**, não uma pendência: ver `DECISIONS.md`, seção "⛔ Decisão permanente de escopo".
+
+### 1. Cadastrar uma Página do Facebook (trilho automático)
+
+Você precisa de duas coisas: o **ID da Página** e um **token de acesso de Página**.
+
+**ID da Página**: no Facebook, abra sua Página → **Configurações → Sobre** (ou "Transparência da Página") → copie a **Identificação da Página**. É só números.
+
+**Token de Página**: o caminho é gerar um token curto de **usuário**, trocá-lo por um de longa duração e, com ele, pedir os tokens das Páginas. O token de Página que sai desse processo **não expira**.
+
+Antes de começar, tenha em mãos o **ID** e a **chave secreta** do seu app: no painel da Meta, **Configurações → Básico** (`SEU_APP_ID` e `SEU_APP_SECRET`). Os exemplos usam `v21.0`, que é o padrão do projeto — se você mudou `FACEBOOK_GRAPH_VERSION` no `.env`, use a mesma versão aqui.
+
+**Passo 1 — token curto de usuário.**
+
+1. Acesse [developers.facebook.com](https://developers.facebook.com) e crie um app (tipo "Empresa/Business"), se ainda não tiver.
+2. Abra **Ferramentas → Explorador da API Graph** (Graph API Explorer).
+3. Em **Aplicativo da Meta**, escolha seu app. Em **Usuário ou Página**, deixe **Token de acesso do usuário**.
+4. Adicione as permissões `pages_manage_posts` (publicar), `pages_read_engagement` e `pages_show_list` (listar suas Páginas).
+5. Clique em **Gerar token de acesso**, autorize e copie o token — é o `SEU_TOKEN_CURTO`. Ele vale ~1 hora, só o suficiente para o passo 2.
+
+**Passo 2 — trocar por um token de usuário de longa duração (~60 dias).**
+
+```bash
+curl -G "https://graph.facebook.com/v21.0/oauth/access_token" \
+  --data-urlencode "grant_type=fb_exchange_token" \
+  --data-urlencode "client_id=SEU_APP_ID" \
+  --data-urlencode "client_secret=SEU_APP_SECRET" \
+  --data-urlencode "fb_exchange_token=SEU_TOKEN_CURTO"
+```
+
+A resposta traz o token longo em `access_token`:
+
+```json
+{ "access_token": "EAAG...", "token_type": "bearer", "expires_in": 5183944 }
+```
+
+Guarde esse valor como `SEU_TOKEN_LONGO`.
+
+**Passo 3 — pegar o token de cada Página.**
+
+```bash
+curl -G "https://graph.facebook.com/v21.0/me/accounts" \
+  --data-urlencode "access_token=SEU_TOKEN_LONGO"
+```
+
+A resposta lista **todas as Páginas que essa conta administra**, cada uma já com o próprio `id` e o próprio `access_token`:
+
+```json
+{
+  "data": [
+    { "name": "Receitas da Vovó", "id": "102938475610293", "access_token": "EAAG..." },
+    { "name": "Doces Fáceis",     "id": "998877665544332", "access_token": "EAAG..." }
+  ]
+}
+```
+
+O `id` e o `access_token` de cada item são exatamente o que o Wordbee pede no cadastro — inclusive o `id`, que dispensa procurar a Identificação da Página no painel do Facebook.
+
+> ✅ **Os tokens de Página do passo 3 não têm expiração própria.** Eles continuam válidos indefinidamente, mesmo depois que o token de usuário de 60 dias vencer — o vencimento dele não derruba os tokens de Página já obtidos. Você só precisa repetir os passos 1–3 se criar uma **Página nova** depois que o token de usuário expirar, e mesmo assim só para pegar o token dessa Página nova: as Páginas já cadastradas continuam funcionando sem nenhuma ação.
+
+**Passo 4 — cadastrar no Wordbee.**
+
+1. Vá em **Páginas do Facebook → + Nova Página**. Preencha o nome de exibição, cole o `id` e o `access_token` daquela Página (do passo 3). Opcionalmente vincule a Página a um blog — assim ela só recebe artigos daquele site (sem vínculo, recebe de todos).
+2. Ao salvar, o Wordbee **testa o token na API real antes de gravar**: token errado não é salvo. O token fica criptografado (AES-256-GCM) e nunca mais aparece em tela, resposta de API ou log — só a máscara (`EAA...4a2f`).
+
+**Se um token de Página for invalidado** — o que não acontece por expiração, mas acontece se você trocar a senha do Facebook, remover o app, revogar as permissões ou perder o papel de administrador da Página —, a publicação falha, o Wordbee marca a Página como inválida e ela para de receber novos agendamentos (para não empilhar falhas). O Dashboard e o Painel de Distribuição avisam. Refaça os passos 1–3 para obter um token novo, edite a Página e cole — deixar o campo em branco mantém o token atual.
+
+### 2. Cadastrar perfis e grupos parceiros (trilho assistido)
+
+**Perfis de Divulgação** são as pessoas reais (família, parceiros) que ajudam postando nos grupos de que já participam. Um perfil aqui é **só um nome e uma observação** — o Wordbee não guarda login, senha nem sessão de ninguém, e nunca posta no lugar de uma pessoa. É uma agenda de a quem atribuir cada tarefa, não um acesso.
+
+**Grupos Parceiros → + Novo grupo**: nome, link, administrador/contato, valor da parceria (0 = sem pagamento), vigência, nº aproximado de membros e status.
+
+- Marque **"O dono do grupo avisa aos membros que existe uma parceria/publicidade"** quando for verdade. É essa transparência que separa publicidade legítima de publicidade velada (CDC/CONAR) — enquanto não marcada, o card mostra um aviso.
+- Em **Perfis do grupo**, vincule quem participa daquele grupo. Só perfis com situação **Aprovado** ou **Já está no grupo** podem receber tarefa de postagem nele — o app não tem (nem deve ter) como fazer alguém entrar num grupo.
+
+### 3. Criar e distribuir um pacote
+
+Um pacote é criado **automaticamente** para cada artigo publicado, desde que exista pelo menos uma Página elegível ou um perfil de divulgação ativo. Você também pode criar um à mão em **Pacotes → + Novo pacote**:
+
+- **Tipo**: *Captação* (o comentário leva ao artigo) ou *Direto pro site* (leva à página de busca do blog pelo tema). O segundo só fica disponível quando o tema já tem **3+ artigos publicados** — mandar tráfego para uma busca com um artigo só entrega uma página quase vazia.
+- **Imagens**: 1 reaproveita a imagem do artigo (sem custo de IA); 2 a 6 geram um **álbum** de fotos novas do mesmo tema, com enquadramentos variados.
+
+O worker monta o pacote nos minutos seguintes (texto e imagens). Quando ficar **Pronto**, o card mostra as imagens e as duas copies, com botão de copiar em cada uma. Se a IA gerou variações de texto, dá para trocar a versão ativa sem gastar outra chamada.
+
+Em **Distribuir nos grupos**, escolha as combinações pessoa × grupo e o dia. O app aplica as regras sozinho:
+
+- só perfis ativos, em grupos com parceria ativa, onde a pessoa já está dentro;
+- **o mesmo perfil não posta duas vezes no mesmo grupo no mesmo dia** (garantido no banco, não só na tela);
+- cada combinação ganha um **link curto rastreado** (`/r/abc12xyz`), que é o que permite saber depois qual grupo converte.
+
+Combinações inválidas não derrubam a operação: entram as válidas e o app diz quais ficaram de fora e por quê.
+
+### 4. O dia a dia na Fila de Distribuição
+
+**Fila de Distribuição** é a tela de trabalho. Mostra o dia agrupado por pessoa; cada item traz o grupo, a imagem, o **texto do post** e o **primeiro comentário já com o link curto daquela combinação**.
+
+O fluxo, por item:
+
+1. Salve a imagem (clique nela para abrir em tamanho real).
+2. **Copiar** o texto do post → publique no grupo com a imagem.
+3. **Copiar** o comentário → cole como primeiro comentário do seu próprio post.
+4. Clique em **Marcar como postado** (ou **Pular hoje**, se não deu).
+
+Filtros por dia, pessoa, grupo e status. O contador no topo mostra quantas das tarefas do dia já saíram.
+
+### 5. Acompanhar o que está funcionando
+
+**Painel de Distribuição** responde a pergunta que decide onde investir:
+
+- publicações automáticas por Página nos últimos 7 dias (sucessos, falhas, agendadas), com aviso de token inválido;
+- fila de hoje: quantas concluídas de quantas;
+- **cliques por grupo e por perfil** — qual parceria realmente traz gente, e quanto cada pessoa está trazendo;
+- **capacidade da estrutura atual** (pacotes/dia × perfis ativos × grupos por perfil), comparada ao realizado. É o teto que a estrutura comporta, **não** uma meta: cadência humana real é sempre menor, e forçar o teto é o que faz um perfil real ser sinalizado como spam.
+
+Duas variáveis de ambiente opcionais afetam esta área (ver `.env.example`): `APP_PUBLIC_URL` (base dos links curtos — sem ela, o app deriva dos headers da requisição) e `APP_TIMEZONE` (fuso usado para decidir "que dia é hoje" na fila; padrão `America/Sao_Paulo`).
+
 ## Deploy: EasyPanel (worker) + Neon (Postgres) + Upstash (Redis)
 
 **Estado atual de produção (validado de ponta a ponta em 2026-08-25): dois ambientes de deploy coordenados, sem Railway.**
@@ -154,7 +282,8 @@ Não é um deploy único: são **dois ambientes de produção** (Vercel e EasyPa
 
 **1. Neon (Postgres)**
 
-- Crie um projeto no [Neon](https://neon.tech) (plano gratuito é suficiente para uso pessoal) e copie a connection string (`postgresql://usuario:senha@host/banco?sslmode=require`). É pública por padrão (feito pra ser acessado de qualquer lugar com TLS) — use o mesmo valor em `DATABASE_URL` na Vercel e no worker do EasyPanel.
+- Crie um projeto no [Neon](https://neon.tech) (plano gratuito é suficiente para uso pessoal) e copie a connection string do endpoint **pooled** (`-pooler`, `postgresql://usuario:senha@host-pooler/banco?sslmode=require`). É pública por padrão (feito pra ser acessado de qualquer lugar com TLS) — use o mesmo valor em `DATABASE_URL` na Vercel e no worker do EasyPanel.
+- **Adicione `&pgbouncer=true&connection_limit=10`** ao final da connection string (nos dois ambientes) — o pooler do Neon é baseado em PgBouncer (modo *transaction*), e o Prisma, por padrão, usa *prepared statements* (protocolo estendido) que não são seguros sobre esse tipo de pooler: sem essa flag, o Prisma pode reutilizar/colidir com uma prepared statement de uma conexão física diferente (reciclada pelo pooler entre transações), causando erros confusos e intermitentes — inclusive `column "..." does not exist` para uma coluna que existe de verdade, se alguma prepared statement antiga (de antes de uma migração) ficar presa numa conexão física que o pooler reaproveita depois. `connection_limit=10` é uma estimativa razoável para o worker (que processa até `WORKER_CONCURRENCY` linhas em paralelo por tick, cada uma podendo abrir sua própria query) — ajuste se necessário. Ver `DECISIONS.md` ("Investigação: worker travado com coluna inexistente apesar de migração aplicada", 2026-08-31).
 
 **2. Upstash (Redis)**
 
@@ -200,11 +329,19 @@ Teste real, não só "o worker está de pé": crie ou edite uma Linha de Produç
 
 ### Atualizar depois de um `git push`
 
-O serviço worker no EasyPanel pode ser configurado com deploy automático no push (mesma configuração de "Source" do passo 4) ou redeploy manual pelo botão do painel. Depois de qualquer atualização com migração nova:
+O serviço worker no EasyPanel pode ser configurado com deploy automático no push (mesma configuração de "Source" do passo 4) ou redeploy manual pelo botão do painel.
+
+> ⚠️ **Ordem importa quando a mudança inclui migração de schema nova**: aplique a migração contra o Postgres de produção **ANTES** de fazer deploy do código novo no web (Vercel) e no worker (EasyPanel), nessa ordem — não depois, não em paralelo. Colunas novas *nullable* são seguras de adicionar enquanto o código antigo ainda está rodando (ele simplesmente as ignora); o inverso — código novo já deployado esperando uma coluna que ainda não existe — não é seguro e derruba tanto a página que fizer aquela query quanto o worker, silenciosamente. Isso já aconteceu de verdade em produção (ver `DECISIONS.md` "Incidente: migração do scheduler cron+Postgres deployada em código sem a migração de schema correspondente", 2026-08-30) — a Vercel, o EasyPanel e o Neon são três deploys independentes, nenhum deles aplica migração pelo outro.
+>
+> Depois de rodar a migração, confirme com `prisma migrate status` (contra o `DATABASE_URL` real de produção) que não sobrou nada pendente — antes de considerar o deploy concluído, não só depois de ver algum erro.
 
 ```bash
 cd packages/db && npx prisma migrate deploy
+# checagem de saída, sempre:
+npx prisma migrate status --schema prisma/schema.prisma
 ```
+
+> ⚠️ **Depois de QUALQUER migração de schema aplicada em produção, reinicie de verdade o container do worker no EasyPanel** (botão "Restart", não só um redeploy que pode não derrubar o processo antigo a tempo) **antes de considerar o deploy concluído** — mesmo com a migração já aplicada e as colunas já existindo no banco, uma conexão do worker aberta antes da migração (via o endpoint `-pooler` do Neon) pode continuar servindo dados/planos de execução presos ao schema anterior por causa de *prepared statements* não isoladas corretamente pelo pooler (ver `&pgbouncer=true` acima). Um restart força o Prisma Client a abrir conexões novas do zero, eliminando essa classe de staleness independentemente da causa exata. Isso já causou um incidente real em produção (`column "locked_at" does not exist` com a migração já aplicada e confirmada) — ver `DECISIONS.md` ("Investigação: worker travado com coluna inexistente apesar de migração aplicada", 2026-08-31).
 
 ## Deploy no VPS sem EasyPanel (fallback)
 

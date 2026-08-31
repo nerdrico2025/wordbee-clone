@@ -2,13 +2,17 @@ import { AI_MODELS } from "./models.js";
 import { fetchJsonOrThrow, fetchWithTimeout, parseJsonArrayResponse, parseJsonObjectResponse } from "./http.js";
 import { AiProviderError, classifyHttpError } from "./errors.js";
 import { buildArticleSystemPrompt, buildTitleSuggestionPrompt } from "../prompts/common.js";
+import { buildDistributionCopySystemPrompt, buildDistributionCopyUserPrompt } from "../prompts/distribution.js";
 import { ARTICLE_TYPE_PROMPTS } from "../prompts/article-types/index.js";
 import { slugify } from "../slugify.js";
+import { parseDistributionCopyResponse } from "./distribution-copy.js";
 import type {
   GenerateArticleInput,
+  GenerateDistributionCopyInput,
   GenerateImageInput,
   GenerateTitlesInput,
   GeneratedArticle,
+  GeneratedDistributionCopy,
   GeneratedImage,
   ImageProvider,
   TextProvider,
@@ -83,6 +87,13 @@ Não use markdown nem texto fora do JSON.`;
         metaTitle: parsed.metaTitle,
         slug: slugify(titulo),
       };
+    },
+
+    async generateDistributionCopy(input: GenerateDistributionCopyInput): Promise<GeneratedDistributionCopy[]> {
+      const json = await generateContent(apiKey, AI_MODELS.gemini.text, buildDistributionCopySystemPrompt(input), [
+        { text: buildDistributionCopyUserPrompt(input) },
+      ]);
+      return parseDistributionCopyResponse(textFromResponse(json), PROVIDER);
     },
   };
 }

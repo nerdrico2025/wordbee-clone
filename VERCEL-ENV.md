@@ -17,7 +17,7 @@ Este projeto tem **dois processos**: o app **web** (Next.js, pode rodar na Verce
 
 | Variável | Para que serve | Obrigatória? | Exemplo / como obter |
 |---|---|---|---|
-| `DATABASE_URL` | Conexão com o Postgres (Prisma) — também é onde o web escreve `status`/`nextRunAt` da linha, sem passar por fila nenhuma | **Obrigatória** | `postgresql://usuario:senha@host:5432/banco?sslmode=require` — em produção, a connection string do **Neon** (ambiente atual). **Precisa ser idêntica à do worker no EasyPanel** — se divergir, o worker nunca vê as linhas que o web cria/atualiza. |
+| `DATABASE_URL` | Conexão com o Postgres (Prisma) — também é onde o web escreve `status`/`nextRunAt` da linha, sem passar por fila nenhuma | **Obrigatória** | `postgresql://usuario:senha@host-pooler:5432/banco?sslmode=require&pgbouncer=true&connection_limit=10` — em produção, a connection string do endpoint **pooled** do **Neon** (ambiente atual), com `pgbouncer=true` para evitar prepared statements presas a conexões físicas recicladas pelo pooler (ver `DECISIONS.md`, 2026-08-31). **Precisa ser idêntica à do worker no EasyPanel** — se divergir, o worker nunca vê as linhas que o web cria/atualiza. |
 | `REDIS_URL` | Conexão com o Redis (usado pelo web só para rate limit de login e para ler o heartbeat de saúde do worker — badge do Dashboard) | **Obrigatória** | string de conexão **TCP/Redis** — em produção, a connection string do **Upstash** (ambiente atual; não a REST URL — `ioredis` precisa do protocolo Redis nativo). **Precisa ser idêntica à do worker no EasyPanel** — se divergir, o badge de saúde do worker no Dashboard mostra "offline" mesmo com o worker rodando normalmente. |
 | `SESSION_SECRET` | Assina o cookie de sessão (JWT HS256) | **Obrigatória** | Gerar com `openssl rand -base64 48` |
 | `ENCRYPTION_KEY` | Chave-mestra AES-256-GCM para criptografar as chaves de API e senhas de aplicação WordPress salvas no banco | **Obrigatória** | Gerar com `openssl rand -base64 32` — **guarde em local seguro**, se perder essa chave os dados criptografados ficam ilegíveis |
@@ -86,7 +86,7 @@ npm run db:seed
 
 | Nome | Valor de exemplo / instrução |
 |---|---|
-| `DATABASE_URL` | `postgresql://usuario:senha@host:5432/banco?sslmode=require` |
+| `DATABASE_URL` | `postgresql://usuario:senha@host-pooler:5432/banco?sslmode=require&pgbouncer=true&connection_limit=10` |
 | `REDIS_URL` | `redis://default:senha@host:6379` |
 | `SESSION_SECRET` | gerar com `openssl rand -base64 48` |
 | `ENCRYPTION_KEY` | gerar com `openssl rand -base64 32` |

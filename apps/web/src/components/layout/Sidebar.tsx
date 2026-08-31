@@ -8,21 +8,61 @@ import {
   Workflow,
   History,
   Globe,
+  Facebook,
   KeyRound,
   User,
   LogOut,
   Sparkles,
+  Package,
+  ListChecks,
+  Users,
+  Handshake,
+  BarChart3,
 } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import { cn } from "@/lib/cn";
 
-const NAV_ITEMS = [
-  { href: "/", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/criar-artigo", label: "Criar Artigo", icon: PenSquare },
-  { href: "/linhas-de-producao", label: "Linhas de Produção", icon: Workflow },
-  { href: "/historico", label: "Histórico", icon: History },
-  { href: "/sites-wordpress", label: "Sites WordPress", icon: Globe },
-  { href: "/chaves-de-api", label: "Chaves de API", icon: KeyRound },
-  { href: "/perfil", label: "Perfil", icon: User },
+interface NavItem {
+  href: string;
+  label: string;
+  icon: LucideIcon;
+}
+
+/**
+ * O menu virou três blocos quando a distribuição entrou: com 12 itens numa
+ * lista corrida, achar "Fila de Distribuição" no meio de "Chaves de API"
+ * vira caça ao tesouro. Os títulos separam produção (fazer o artigo),
+ * distribuição (levar o artigo às pessoas) e configuração.
+ */
+const NAV_GROUPS: { titulo: string; itens: NavItem[] }[] = [
+  {
+    titulo: "Produção",
+    itens: [
+      { href: "/", label: "Dashboard", icon: LayoutDashboard },
+      { href: "/criar-artigo", label: "Criar Artigo", icon: PenSquare },
+      { href: "/linhas-de-producao", label: "Linhas de Produção", icon: Workflow },
+      { href: "/historico", label: "Histórico", icon: History },
+    ],
+  },
+  {
+    titulo: "Distribuição",
+    itens: [
+      { href: "/painel-de-distribuicao", label: "Painel", icon: BarChart3 },
+      { href: "/fila-de-distribuicao", label: "Fila de Distribuição", icon: ListChecks },
+      { href: "/pacotes-de-distribuicao", label: "Pacotes", icon: Package },
+      { href: "/paginas-facebook", label: "Páginas do Facebook", icon: Facebook },
+      { href: "/perfis-de-divulgacao", label: "Perfis de Divulgação", icon: Users },
+      { href: "/grupos-parceiros", label: "Grupos Parceiros", icon: Handshake },
+    ],
+  },
+  {
+    titulo: "Configuração",
+    itens: [
+      { href: "/sites-wordpress", label: "Sites WordPress", icon: Globe },
+      { href: "/chaves-de-api", label: "Chaves de API", icon: KeyRound },
+      { href: "/perfil", label: "Perfil", icon: User },
+    ],
+  },
 ];
 
 export interface SidebarProps {
@@ -49,32 +89,36 @@ export function Sidebar({ user, onNavigate }: SidebarProps) {
         <span className="text-lg font-extrabold tracking-tight text-white">WORDBEE</span>
       </div>
 
-      <nav className="flex-1 overflow-y-auto px-3">
-        <p className="px-3 pb-2 text-[11px] font-semibold uppercase tracking-wider text-zinc-500">Menu</p>
-        <ul className="flex flex-col gap-1">
-          {NAV_ITEMS.map((item) => {
-            const active = item.href === "/" ? pathname === "/" : pathname.startsWith(item.href);
-            const Icon = item.icon;
-            return (
-              <li key={item.href}>
-                <Link
-                  href={item.href}
-                  onClick={onNavigate}
-                  aria-current={active ? "page" : undefined}
-                  className={cn(
-                    "flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors",
-                    active
-                      ? "bg-primary-600 text-white shadow-sm"
-                      : "text-zinc-300 hover:bg-white/5 hover:text-white"
-                  )}
-                >
-                  <Icon className="h-4 w-4 shrink-0" aria-hidden />
-                  {item.label}
-                </Link>
-              </li>
-            );
-          })}
-        </ul>
+      <nav className="flex-1 overflow-y-auto px-3 pb-4">
+        {NAV_GROUPS.map((grupo) => (
+          <div key={grupo.titulo} className="mb-4 last:mb-0">
+            <p className="px-3 pb-2 text-[11px] font-semibold uppercase tracking-wider text-zinc-500">{grupo.titulo}</p>
+            <ul className="flex flex-col gap-1">
+              {grupo.itens.map((item) => {
+                const active = item.href === "/" ? pathname === "/" : pathname.startsWith(item.href);
+                const Icon = item.icon;
+                return (
+                  <li key={item.href}>
+                    <Link
+                      href={item.href}
+                      onClick={onNavigate}
+                      aria-current={active ? "page" : undefined}
+                      className={cn(
+                        "flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors",
+                        active
+                          ? "bg-primary-600 text-white shadow-sm"
+                          : "text-zinc-300 hover:bg-white/5 hover:text-white"
+                      )}
+                    >
+                      <Icon className="h-4 w-4 shrink-0" aria-hidden />
+                      {item.label}
+                    </Link>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        ))}
       </nav>
 
       <div className="border-t border-white/10 p-4">
