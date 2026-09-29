@@ -17,7 +17,7 @@ Este projeto tem **dois processos**: o app **web** (Next.js, pode rodar na Verce
 
 | Variável | Para que serve | Obrigatória? | Exemplo / como obter |
 |---|---|---|---|
-| `DATABASE_URL` | Conexão com o Postgres (Prisma) — também é onde o web escreve `status`/`nextRunAt` da linha, sem passar por fila nenhuma | **Obrigatória** | `postgresql://usuario:senha@host-pooler:5432/banco?sslmode=require&pgbouncer=true&connection_limit=10` — em produção, a connection string do endpoint **pooled** do **Neon** (ambiente atual), com `pgbouncer=true` para evitar prepared statements presas a conexões físicas recicladas pelo pooler (ver `DECISIONS.md`, 2026-08-31). **Precisa ser idêntica à do worker no EasyPanel** — se divergir, o worker nunca vê as linhas que o web cria/atualiza. |
+| `DATABASE_URL` | Conexão com o Postgres (Prisma) — também é onde o web escreve `status`/`nextRunAt` da linha, sem passar por fila nenhuma | **Obrigatória** | `postgresql://wordbee:senha@ip-do-vps:porta/wordbee?sslmode=require&sslaccept=accept_invalid_certs&connection_limit=5`. Em produção, é o Postgres do VPS (serviço `postgres` no EasyPanel, porta pública com TLS obrigatório; ver README, "Postgres no VPS"). Sem `pgbouncer=true`: a conexão é direta, sem pooler. **Precisa ser idêntica à do worker no EasyPanel** — se divergir, o worker nunca vê as linhas que o web cria/atualiza. |
 | `REDIS_URL` | Conexão com o Redis (usado pelo web só para rate limit de login e para ler o heartbeat de saúde do worker — badge do Dashboard) | **Obrigatória** | string de conexão **TCP/Redis** — em produção, a connection string do **Upstash** (ambiente atual; não a REST URL — `ioredis` precisa do protocolo Redis nativo). **Precisa ser idêntica à do worker no EasyPanel** — se divergir, o badge de saúde do worker no Dashboard mostra "offline" mesmo com o worker rodando normalmente. |
 | `SESSION_SECRET` | Assina o cookie de sessão (JWT HS256) | **Obrigatória** | Gerar com `openssl rand -base64 48` |
 | `ENCRYPTION_KEY` | Chave-mestra AES-256-GCM para criptografar as chaves de API e senhas de aplicação WordPress salvas no banco | **Obrigatória** | Gerar com `openssl rand -base64 32` — **guarde em local seguro**, se perder essa chave os dados criptografados ficam ilegíveis |
@@ -68,10 +68,10 @@ O worker tem `apps/worker/Dockerfile` pronto — no EasyPanel, aponte o build pa
 
 Este projeto **não depende de infraestrutura da Vercel nem do EasyPanel** para banco de dados ou fila — é BYOK e de uso pessoal. **Ambiente atual de produção:**
 
-- **Postgres**: **Neon** (gerenciado, plano gratuito, endpoint público com TLS). Precisa ser alcançável tanto pela Vercel (web) quanto pelo worker (EasyPanel) — a mesma `DATABASE_URL` nos dois.
+- **Postgres**: serviço **`postgres` no EasyPanel** (mesmo VPS do worker; imagem `infra/postgres/Dockerfile`), com a porta publicada na internet e TLS obrigatório. Precisa ser alcançável tanto pela Vercel (web) quanto pelo worker — a mesma `DATABASE_URL` nos dois. Até 2026-09 era o Neon; saiu porque o polling do worker mantinha o compute ligado 24/7 e estourava a cota do plano free (ver `DECISIONS.md`, 2026-09-28).
 - **Redis**: **Upstash** (gerenciado, plano gratuito, endpoint público com TLS, protocolo Redis nativo — não a REST URL). Mesma lógica: a mesma `REDIS_URL` na Vercel e no worker. **Nunca** o Redis interno de um serviço do EasyPanel — a Vercel roda com IP de saída dinâmico e não alcança redes privadas de forma confiável (ver aviso completo em README.md, "Deploy no EasyPanel").
 
-Qualquer outro provedor gerenciado com endpoint público e TLS (Supabase, outro Redis compatível) funciona do mesmo jeito — Neon e Upstash são só o que está em uso hoje.
+Qualquer outro provedor gerenciado com endpoint público e TLS (Supabase, outro Redis compatível) funciona do mesmo jeito — o Upstash é só o que está em uso hoje. Para Postgres, evite provedores que cobram por tempo de compute ligado: o worker consulta o banco a cada 1,5–2 min.
 
 Depois de provisionar os dois, rode a migração e o seed uma vez (da sua máquina, com `DATABASE_URL` apontando para o Postgres de produção):
 

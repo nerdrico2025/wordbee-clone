@@ -15,7 +15,8 @@ Aplicação web de uso pessoal para gerar e publicar artigos no WordPress automa
 - [Como gerar a senha de aplicação no WordPress](#como-gerar-a-senha-de-aplicação-no-wordpress)
 - [Como usar: sites, chaves, artigos e linhas de produção](#como-usar)
 - [Distribuição: levar os artigos até as pessoas](#distribuição-levar-os-artigos-até-as-pessoas)
-- [Deploy: EasyPanel (worker) + Neon (Postgres) + Upstash (Redis)](#deploy-easypanel-worker--neon-postgres--upstash-redis)
+- [Deploy: EasyPanel (worker + Postgres) + Upstash (Redis)](#deploy-easypanel-worker--postgres--upstash-redis)
+- [Migração Neon → Postgres no VPS](#migração-neon--postgres-no-vps)
 - [Deploy no VPS sem EasyPanel (fallback)](#deploy-no-vps-sem-easypanel-fallback)
 - [Backup e restauração do banco](#backup-e-restauração-do-banco)
 - [Scripts disponíveis](#scripts-disponíveis)
@@ -252,7 +253,7 @@ Filtros por dia, pessoa, grupo e status. O contador no topo mostra quantas das t
 
 Duas variáveis de ambiente opcionais afetam esta área (ver `.env.example`): `APP_PUBLIC_URL` (base dos links curtos — sem ela, o app deriva dos headers da requisição) e `APP_TIMEZONE` (fuso usado para decidir "que dia é hoje" na fila; padrão `America/Sao_Paulo`).
 
-## Deploy: EasyPanel (worker) + Neon (Postgres) + Upstash (Redis)
+## Deploy: EasyPanel (worker + Postgres) + Upstash (Redis)
 
 **Estado atual de produção (validado de ponta a ponta em 2026-08-25): dois ambientes de deploy coordenados, sem Railway.**
 
@@ -260,12 +261,14 @@ Duas variáveis de ambiente opcionais afetam esta área (ver `.env.example`): `A
 |---|---|---|
 | **web** (Next.js) | **Vercel** (serverless) | Só escreve `status`/`nextRunAt` direto no Postgres ao criar/pausar/retomar/excluir uma linha — não agenda nada em fila nenhuma (ver DECISIONS.md "scheduler cron+Postgres") |
 | **worker** (cron+Postgres) | **EasyPanel**, serviço "App" único, Docker no VPS próprio | Faz polling periódico no Postgres (linhas ATIVA com `nextRunAt` vencido) e processa; único serviço que roda no VPS — sem Postgres nem Redis locais |
-| **Postgres** | **Neon** (gerenciado, externo) | Mesma instância para web e worker — `DATABASE_URL` idêntica nos dois ambientes; também é a fonte de verdade do agendamento (`nextRunAt`) e do lock de execução por linha |
+| **Postgres** | **EasyPanel**, serviço "App" `postgres` (imagem `infra/postgres/Dockerfile`, Postgres 17) no mesmo VPS | Porta publicada na internet com **TLS obrigatório** (conexão sem TLS é recusada) e senha SCRAM; mesma `DATABASE_URL` para web e worker. Também é a fonte de verdade do agendamento (`nextRunAt`) e do lock de execução por linha. Até 2026-09 era o Neon (ver DECISIONS.md, 2026-09-28) |
 | **Redis** | **Upstash** (gerenciado, externo) | Mesma instância para web e worker — `REDIS_URL` idêntica nos dois ambientes; rate limit de login (só web), semáforo de concorrência por provedor de IA (só worker) e heartbeat de saúde do worker (escrito pelo worker, lido pelo web) |
 
-Não é um deploy único: são **dois ambientes de produção** (Vercel e EasyPanel) que **compartilham** dois serviços de dados externos (Neon e Upstash) em vez de cada um ter os seus. Railway foi totalmente descontinuada — nenhum serviço (web, worker, Postgres ou Redis) roda mais lá; ver `DECISIONS.md` ("Estado final da infraestrutura de produção — Railway descontinuada").
+Não é um deploy único: são **dois ambientes de produção** (Vercel e EasyPanel) que **compartilham** o mesmo Postgres (no VPS do EasyPanel) e o mesmo Redis (Upstash) em vez de cada um ter os seus. Railway foi totalmente descontinuada — nenhum serviço (web, worker, Postgres ou Redis) roda mais lá; ver `DECISIONS.md` ("Estado final da infraestrutura de produção — Railway descontinuada").
 
-> ⚠️ **Por que Postgres e Redis são serviços externos (Neon/Upstash) em vez de rodarem no próprio VPS/EasyPanel**: o web (Vercel) é **serverless com IP de saída dinâmico/não fixo** — ele não consegue depender de forma confiável de um banco ou Redis que só aceite conexões de uma rede privada ou de IPs fixos (regra de firewall por IP não serve para IP dinâmico, e deixar a porta aberta pra qualquer IP de origem é um risco desnecessário para expor dados de produção). Neon e Upstash são desenhados exatamente para esse padrão — endpoint público com TLS, otimizados para clientes serverless/edge. Isso também simplifica o VPS: o EasyPanel só precisa rodar o container do worker (stateless), sem Postgres/Redis para fazer backup, atualizar de versão ou proteger localmente.
+> ⚠️ **Por que o Postgres roda no VPS com porta pública (e por que o Redis continua no Upstash)**: o web (Vercel) é **serverless com IP de saída dinâmico**, então não dá para liberar só os IPs dele no firewall nem usar a rede privada do EasyPanel. A porta do Postgres fica aberta para qualquer origem; o que protege é: (1) `pg_hba.conf` só aceita `hostssl` para conexões externas, (2) autenticação `scram-sha-256` com senha longa e aleatória, (3) porta alta não padrão. Até 2026-09 o Postgres era o Neon, que foi abandonado porque o polling do worker (a cada 1,5–2 min) mantinha o compute ligado 24/7 e estourava a cota do plano free, o que derrubou o login e o worker (DECISIONS.md, 2026-09-28). O Redis segue no Upstash, que cobra por comando, não por tempo ligado.
+>
+> **Contrapartida**: o Neon tinha backup/PITR gerenciado; o Postgres no VPS não tem. Faça backup periódico (`scripts/backup.sh` com a `DATABASE_URL` pública, de fora do VPS).
 >
 > **Consequência prática**: `DATABASE_URL` e `REDIS_URL` do web (Vercel) e do worker (EasyPanel) precisam ser **literalmente o mesmo valor** nos dois ambientes — não "a mesma instância acessada por endereços diferentes", o mesmo texto de connection string. Se `DATABASE_URL` divergir, o web escreve `nextRunAt`/`status` num banco que o worker nunca lê, e a linha de produção nunca dispara. Se `REDIS_URL` divergir, o sintoma é mais discreto (rate limit de login e badge de saúde do worker no Dashboard passam a se comportar errado), mas o agendamento em si continua funcionando — desde a migração para cron+Postgres, o Redis não é mais crítico pro disparo das linhas em si.
 
@@ -274,16 +277,26 @@ Não é um deploy único: são **dois ambientes de produção** (Vercel e EasyPa
 ### Variáveis que você precisa ter em mãos
 
 - A **`ENCRYPTION_KEY`** de produção (a mesma configurada hoje na Vercel — copie do painel: Settings → Environment Variables). **Nunca gere uma nova** nem deixe divergir entre Vercel e EasyPanel: é ela que descriptografa `api_keys.chave_encrypted` e `wp_sites.app_password_encrypted` no Postgres (Neon); se divergir, esses dados ficam ilegíveis sem erro visível na hora, só na primeira tentativa de uso.
-- A **connection string do Neon** (Postgres) — mesmo valor de `DATABASE_URL` nos dois ambientes.
+- A **connection string do Postgres do VPS** (passo 1) — mesmo valor de `DATABASE_URL` nos dois ambientes.
 - A **connection string TCP do Upstash** (`rediss://...`, não a REST URL — `ioredis` precisa do protocolo Redis nativo) — mesmo valor de `REDIS_URL` nos dois ambientes.
 - O `SESSION_SECRET` da Vercel (só o web usa; não precisa no worker).
 
 ### Passo a passo (setup do zero, ou recriar o ambiente)
 
-**1. Neon (Postgres)**
+**1. Postgres (serviço "App" no EasyPanel)**
 
-- Crie um projeto no [Neon](https://neon.tech) (plano gratuito é suficiente para uso pessoal) e copie a connection string do endpoint **pooled** (`-pooler`, `postgresql://usuario:senha@host-pooler/banco?sslmode=require`). É pública por padrão (feito pra ser acessado de qualquer lugar com TLS) — use o mesmo valor em `DATABASE_URL` na Vercel e no worker do EasyPanel.
-- **Adicione `&pgbouncer=true&connection_limit=10`** ao final da connection string (nos dois ambientes) — o pooler do Neon é baseado em PgBouncer (modo *transaction*), e o Prisma, por padrão, usa *prepared statements* (protocolo estendido) que não são seguros sobre esse tipo de pooler: sem essa flag, o Prisma pode reutilizar/colidir com uma prepared statement de uma conexão física diferente (reciclada pelo pooler entre transações), causando erros confusos e intermitentes — inclusive `column "..." does not exist` para uma coluna que existe de verdade, se alguma prepared statement antiga (de antes de uma migração) ficar presa numa conexão física que o pooler reaproveita depois. `connection_limit=10` é uma estimativa razoável para o worker (que processa até `WORKER_CONCURRENCY` linhas em paralelo por tick, cada uma podendo abrir sua própria query) — ajuste se necessário. Ver `DECISIONS.md` ("Investigação: worker travado com coluna inexistente apesar de migração aplicada", 2026-08-31).
+- No projeto do EasyPanel: **+ Service → App**, nome `postgres`.
+- **Source**: o mesmo repositório do GitHub. **Build**: Dockerfile, caminho `infra/postgres/Dockerfile`, **contexto = raiz do repositório**.
+- **Variáveis de ambiente**: `POSTGRES_USER=wordbee`, `POSTGRES_DB=wordbee`, `POSTGRES_PASSWORD=<openssl rand -hex 32>`. Use hex: base64 tem `/` e `+`, que quebram a URL.
+- **Volume persistente** (Mounts → Volume): montado em `/var/lib/postgresql/data`. Sem ele, os dados somem a cada redeploy.
+- **Porta** (Advanced → Ports): publique uma porta alta não padrão (ex.: `54329`) → target `5432`, protocolo TCP. Sem domínio/proxy HTTP: é TCP puro. Libere essa porta no firewall do VPS, se houver.
+- **Deploy automático no push: desligue** para este serviço. Todo redeploy reinicia o banco, e só precisa acontecer quando `infra/postgres/` mudar.
+- `DATABASE_URL` resultante (a mesma na Vercel e no worker):
+  `postgresql://wordbee:<SENHA>@<IP-DO-VPS>:54329/wordbee?sslmode=require&sslaccept=accept_invalid_certs&connection_limit=5`
+  - `sslmode=require`: o servidor recusa conexão sem TLS.
+  - `sslaccept=accept_invalid_certs`: o certificado é autoassinado e regenerado a cada start.
+  - **Sem `pgbouncer=true`**: conexão direta, sem pooler (a flag só existia por causa do Neon).
+- Teste da sua máquina: `psql "<DATABASE_URL sem os parâmetros sslaccept/connection_limit>" -c "select 1"` precisa funcionar. Com `sslmode=disable` precisa falhar com `no pg_hba.conf entry ... no encryption`.
 
 **2. Upstash (Redis)**
 
@@ -300,7 +313,7 @@ Não é um deploy único: são **dois ambientes de produção** (Vercel e EasyPa
 - **Build**: tipo Dockerfile, caminho `apps/worker/Dockerfile`, **contexto de build = raiz do repositório** (não `apps/worker/`) — o Dockerfile copia `package.json`/`packages/*` da raiz do monorepo.
 - **Sem porta exposta e sem domínio**: o worker não sobe servidor HTTP (só faz polling no Postgres), então não marque "Expose" nem configure domínio/SSL para esse serviço.
 - **Variáveis de ambiente** do serviço worker (ver `.env.production.example` para a lista completa e comentada):
-  - `DATABASE_URL` → connection string do **Neon** (passo 1) — idêntica à da Vercel
+  - `DATABASE_URL` → connection string do **Postgres do VPS** (passo 1) — idêntica à da Vercel
   - `REDIS_URL` → connection string do **Upstash** (passo 2) — idêntica à da Vercel
   - `ENCRYPTION_KEY` → **a mesma chave que já está na Vercel** (não gere uma nova)
   - `STORAGE_DRIVER=local`, `STORAGE_LOCAL_PATH=/repo/storage/uploads`
@@ -317,7 +330,7 @@ Pelo terminal do serviço worker no próprio EasyPanel (ou via SSH no VPS + `doc
 cd packages/db && npx prisma migrate deploy
 ```
 
-O seed (`npx tsx prisma/seed.ts`) só é necessário se for um banco **novo, vazio** — o usuário único já existe no Neon de produção atual.
+O seed (`npx tsx prisma/seed.ts`) só é necessário se for um banco **novo, vazio** — o usuário único já vem no dump migrado do Neon (ver "Migração Neon → Postgres no VPS").
 
 **6. Vercel (app web)**
 
@@ -342,6 +355,34 @@ npx prisma migrate status --schema prisma/schema.prisma
 ```
 
 > ⚠️ **Depois de QUALQUER migração de schema aplicada em produção, reinicie de verdade o container do worker no EasyPanel** (botão "Restart", não só um redeploy que pode não derrubar o processo antigo a tempo) **antes de considerar o deploy concluído** — mesmo com a migração já aplicada e as colunas já existindo no banco, uma conexão do worker aberta antes da migração (via o endpoint `-pooler` do Neon) pode continuar servindo dados/planos de execução presos ao schema anterior por causa de *prepared statements* não isoladas corretamente pelo pooler (ver `&pgbouncer=true` acima). Um restart força o Prisma Client a abrir conexões novas do zero, eliminando essa classe de staleness independentemente da causa exata. Isso já causou um incidente real em produção (`column "locked_at" does not exist` com a migração já aplicada e confirmada) — ver `DECISIONS.md` ("Investigação: worker travado com coluna inexistente apesar de migração aplicada", 2026-08-31).
+
+## Migração Neon → Postgres no VPS
+
+Roteiro único da troca de 2026-09 (ver DECISIONS.md "Postgres sai do Neon para o VPS"). O Neon está bloqueado por cota de compute, então o dump só é possível depois que a cota zerar no próximo ciclo.
+
+**Antes do reset da cota (pode ser feito já):**
+
+1. Suba o serviço `postgres` no EasyPanel (passo 1 de "Deploy" acima) e rode as migrações nele, a partir da sua máquina: `cd packages/db && DATABASE_URL="<URL nova>" npx prisma migrate deploy`. Isso só valida o acesso e o TLS: o restore abaixo recria tudo.
+2. **Pare o worker no EasyPanel** (Stop). Se ele estiver rodando quando a cota zerar, volta a consultar o Neon a cada 90s e gasta a cota nova. Além disso, sem worker, nada é escrito no Neon depois do dump.
+
+**Depois do reset da cota** (a Vercel ainda aponta pro Neon; não use o app até o fim):
+
+3. Dump do Neon com cliente Postgres 17 (o `pg_dump` 16 do Homebrew recusa servidor 17). Use a URL do Neon **sem** os parâmetros do Prisma (`pgbouncer`, `connection_limit`), que o libpq não entende:
+   ```bash
+   docker run --rm -v "$PWD/backups:/backups" postgres:17-alpine \
+     pg_dump "postgresql://USUARIO:SENHA@ep-...neon.tech/neondb?sslmode=require" \
+     --format=custom --no-owner --no-privileges --file=/backups/neon_final.dump
+   ```
+4. Restaure no Postgres do VPS (URL **sem** `sslaccept`/`connection_limit`). `--clean` remove o que o `migrate deploy` do passo 1 criou:
+   ```bash
+   docker run --rm -v "$PWD/backups:/backups" postgres:17-alpine \
+     pg_restore --dbname="postgresql://wordbee:SENHA@IP-DO-VPS:54329/wordbee?sslmode=require" \
+     --clean --if-exists --no-owner --no-privileges /backups/neon_final.dump
+   ```
+5. Confira: `cd packages/db && DATABASE_URL="<URL nova completa>" npx prisma migrate status` precisa dizer *Database schema is up to date*. Compare também uma contagem, ex.: `select count(*) from articles` nos dois bancos.
+6. Troque `DATABASE_URL` pela URL nova **na Vercel** (e faça redeploy; env var nova só vale em deploy novo) e **no worker do EasyPanel**, com texto idêntico nos dois. Suba o worker de novo.
+7. Valide: login no app; logs do worker mostrando `scheduler_modo` e ticks sem erro de conexão.
+8. Atualize o `.env` local para a URL nova (ou para um Postgres local de dev). Depois de alguns dias estável, apague o projeto no Neon.
 
 ## Deploy no VPS sem EasyPanel (fallback)
 

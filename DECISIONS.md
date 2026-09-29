@@ -51,6 +51,17 @@ Fonte original: `distribuicao-wordbee-especificacao.md` §7 e `plano-acao-claude
 
 ---
 
+## Postgres sai do Neon para o VPS (EasyPanel) — cota de compute estourada (2026-09-28)
+
+- **Incidente**: login em produção retornava "Erro de conexão. Tente novamente." Causa real: o Neon recusava toda query com `ERROR: Your account or project has exceeded the compute time quota`. A rota `/api/auth/login` passava pelo rate limit (Upstash, ok) e quebrava no `prisma.user.findUnique`; o 500 não-JSON fazia o `res.json()` do `LoginForm` lançar e cair no `catch` genérico. O worker também ficou sem banco desde então (linhas e distribuição paradas).
+- **Por que a cota acabou**: desde o scheduler cron+Postgres (2026-08-30) o worker consulta o Postgres a cada 90s (linhas) e 120s (distribuição). O Neon só suspende o compute após ~5 min sem query, então o compute nunca desligava e ficava ligado 24/7, consumindo a cota do plano free na metade do ciclo.
+- **Decisão**: o Postgres passa a rodar no próprio VPS, como serviço "App" do EasyPanel (`infra/postgres/Dockerfile`, Postgres 17), sem limite de compute. O web continua na Vercel; o Upstash (Redis) continua como está.
+- **Por que imagem própria e não o template nativo de Postgres do EasyPanel**: a Vercel tem IP de saída dinâmico, então a porta precisa ficar aberta para qualquer IP (o risco já descrito no README). A imagem própria garante que **conexão sem TLS é recusada** (`pg_hba.conf` só tem `hostssl` para origens externas) e que a autenticação é só `scram-sha-256`. Testado localmente: `sslmode=disable` → `no pg_hba.conf entry ... no encryption`; `sslmode=require` → ok; `prisma migrate deploy` → ok.
+- **Certificado autoassinado, regenerado a cada start** (`infra/postgres/entrypoint-tls.sh`). Os clientes usam `sslmode=require&sslaccept=accept_invalid_certs`: o tráfego é cifrado, mas o certificado não é validado (sem proteção contra MITM ativo entre Vercel e VPS). Com SCRAM, a senha nunca trafega nem para um MITM. Aceito para app pessoal de usuário único; fixar o certificado (`sslcert=`) fica como endurecimento futuro. Obs.: o Prisma 5.22 já aceitava o certificado autoassinado só com `sslmode=require`; o `sslaccept` explícito protege contra mudança desse comportamento.
+- **Sem pooler**: conexão direta ao Postgres, então **sem `pgbouncer=true`** (aquela flag só existia por causa do PgBouncer do Neon). `connection_limit=5` na URL (compartilhada por Vercel e worker) e `max_connections=100` no servidor; keepalive TCP de 60s derruba conexões de funções serverless congeladas.
+- **Perdas em relação ao Neon**: não há mais PITR/backup gerenciado. O backup agora é responsabilidade nossa (`scripts/backup.sh` apontando para a URL pública, ou uma rotina agendada no VPS).
+- **Dados**: o dump do Neon só pode ser feito quando a cota zerar (escolha do Rafael, em vez de fazer upgrade temporário). Roteiro em README, "Migração Neon → Postgres no VPS".
+
 ## Distribuição de conteúdo — PROMPT 3: painel, robustez e documentação (2026-08-31)
 
 Última etapa da feature (PROMPT 3 de `plano-acao-claude-code-distribuicao.md`).
