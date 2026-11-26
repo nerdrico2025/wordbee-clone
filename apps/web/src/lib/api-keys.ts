@@ -2,7 +2,8 @@ import "server-only";
 import { prisma } from "@wordbee/db";
 import type { AiProvider, ApiKeyKind } from "@wordbee/db";
 import { decrypt, encrypt, maskSecret, validateProviderKey, TEXT_PROVIDERS, IMAGE_PROVIDERS } from "@wordbee/shared";
-import type { AiProviderName } from "@wordbee/shared";
+import type { AiProviderName, ModelDisplay } from "@wordbee/shared";
+import { getActiveModels } from "@/lib/ai-model-settings";
 
 export type Capability = "TEXTO" | "IMAGEM";
 
@@ -19,7 +20,8 @@ function tiposToQuery(capability: Capability): ApiKeyKind[] {
 export interface ApiKeyCard {
   provider: AiProviderName;
   nome: string;
-  modeloLabel: string;
+  /** Modelo ativo resolvido (painel → env → padrão), nunca um rótulo fixo. */
+  modelo: ModelDisplay;
   descricao: string;
   keyPrefixPlaceholder: string;
   gratuito?: boolean;
@@ -34,13 +36,15 @@ export interface ApiKeyCard {
 }
 
 export async function listApiKeyCards(userId: string): Promise<{ texto: ApiKeyCard[]; imagem: ApiKeyCard[] }> {
-  const rows = await prisma.apiKey.findMany({ where: { userId } });
+  const [rows, ativos] = await Promise.all([prisma.apiKey.findMany({ where: { userId } }), getActiveModels(userId)]);
 
   function toCard(info: (typeof TEXT_PROVIDERS)[number], capability: Capability): ApiKeyCard {
     const tipos = tiposToQuery(capability);
     const row = rows.find((r) => r.provider === info.provider && tipos.includes(r.tipo));
+    const modelo = (capability === "TEXTO" ? ativos.texto : ativos.imagem)[info.provider]!;
     return {
       ...info,
+      modelo,
       configured: !!row,
       maskedKey: row?.maskedHint,
       statusValidacao: row?.statusValidacao,
@@ -117,16 +121,23 @@ export async function getDecryptedApiKey(userId: string, provider: AiProviderNam
 export interface ConfiguredProvider {
   provider: AiProviderName;
   nome: string;
-  modeloLabel: string;
+  modelo: ModelDisplay;
   suportaImagensReferencia?: boolean;
 }
 
 export async function listConfiguredProviders(userId: string, capability: Capability): Promise<ConfiguredProvider[]> {
-  const rows = await prisma.apiKey.findMany({
-    where: { userId, tipo: { in: tiposToQuery(capability) }, statusValidacao: true },
-  });
+  const [rows, ativos] = await Promise.all([
+    prisma.apiKey.findMany({ where: { userId, tipo: { in: tiposToQuery(capability) }, statusValidacao: true } }),
+    getActiveModels(userId),
+  ]);
   const registry = capability === "TEXTO" ? TEXT_PROVIDERS : IMAGE_PROVIDERS;
+  const modelos = capability === "TEXTO" ? ativos.texto : ativos.imagem;
   return registry
     .filter((info) => rows.some((r) => r.provider === info.provider))
-    .map((info) => ({ provider: info.provider, nome: info.nome, modeloLabel: info.modeloLabel, suportaImagensReferencia: (info as { suportaImagensReferencia?: boolean }).suportaImagensReferencia }));
+    .map((info) => ({
+      provider: info.provider,
+      nome: info.nome,
+      modelo: modelos[info.provider]!,
+      suportaImagensReferencia: (info as { suportaImagensReferencia?: boolean }).suportaImagensReferencia,
+    }));
 }

@@ -140,15 +140,15 @@ enum FilaDistribuicaoStatus {
 // ---------------------------------------------------------------------------
 
 model User {
-  id           String   @id @default(cuid())
-  nome         String
-  email        String   @unique
-  senhaHash    String   @map("senha_hash")
-  temaUi       String   @default("light") @map("tema_ui")
-  totpSecret   String?  @map("totp_secret")
-  totpEnabled  Boolean  @default(false) @map("totp_enabled")
-  createdAt    DateTime @default(now()) @map("created_at")
-  updatedAt    DateTime @updatedAt @map("updated_at")
+  id          String   @id @default(cuid())
+  nome        String
+  email       String   @unique
+  senhaHash   String   @map("senha_hash")
+  temaUi      String   @default("light") @map("tema_ui")
+  totpSecret  String?  @map("totp_secret")
+  totpEnabled Boolean  @default(false) @map("totp_enabled")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
 
   apiKeys              ApiKey[]
   wpSites              WpSite[]
@@ -185,19 +185,19 @@ model Session {
 }
 
 model ApiKey {
-  id               String     @id @default(cuid())
-  userId           String     @map("user_id")
-  provider         AiProvider
-  tipo             ApiKeyKind
-  chaveEncrypted   String     @map("chave_encrypted")
-  iv               String
-  authTag          String     @map("auth_tag")
-  maskedHint       String     @map("masked_hint")
-  statusValidacao  Boolean    @default(false) @map("status_validacao")
-  lastValidatedAt  DateTime?  @map("last_validated_at")
-  lastError        String?    @map("last_error")
-  createdAt        DateTime   @default(now()) @map("created_at")
-  updatedAt        DateTime   @updatedAt @map("updated_at")
+  id              String     @id @default(cuid())
+  userId          String     @map("user_id")
+  provider        AiProvider
+  tipo            ApiKeyKind
+  chaveEncrypted  String     @map("chave_encrypted")
+  iv              String
+  authTag         String     @map("auth_tag")
+  maskedHint      String     @map("masked_hint")
+  statusValidacao Boolean    @default(false) @map("status_validacao")
+  lastValidatedAt DateTime?  @map("last_validated_at")
+  lastError       String?    @map("last_error")
+  createdAt       DateTime   @default(now()) @map("created_at")
+  updatedAt       DateTime   @updatedAt @map("updated_at")
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -206,19 +206,19 @@ model ApiKey {
 }
 
 model WpSite {
-  id                    String    @id @default(cuid())
-  userId                String    @map("user_id")
-  nome                  String
-  url                   String
-  usuario               String
-  appPasswordEncrypted  String    @map("app_password_encrypted")
-  iv                    String
-  authTag               String    @map("auth_tag")
-  lastTestAt            DateTime? @map("last_test_at")
-  lastTestOk            Boolean?  @map("last_test_ok")
-  lastTestError         String?   @map("last_test_error")
-  createdAt             DateTime  @default(now()) @map("created_at")
-  updatedAt             DateTime  @updatedAt @map("updated_at")
+  id                   String    @id @default(cuid())
+  userId               String    @map("user_id")
+  nome                 String
+  url                  String
+  usuario              String
+  appPasswordEncrypted String    @map("app_password_encrypted")
+  iv                   String
+  authTag              String    @map("auth_tag")
+  lastTestAt           DateTime? @map("last_test_at")
+  lastTestOk           Boolean?  @map("last_test_ok")
+  lastTestError        String?   @map("last_test_error")
+  createdAt            DateTime  @default(now()) @map("created_at")
+  updatedAt            DateTime  @updatedAt @map("updated_at")
 
   user            User             @relation(fields: [userId], references: [id], onDelete: Cascade)
   productionLines ProductionLine[]
@@ -230,27 +230,27 @@ model WpSite {
 }
 
 model ProductionLine {
-  id                 String            @id @default(cuid())
-  userId             String            @map("user_id")
-  wpSiteId           String            @map("wp_site_id")
-  nome               String
-  categoriaWpId      Int?              @map("categoria_wp_id")
-  categoriaWpNome    String?           @map("categoria_wp_nome")
-  iaTexto            AiProvider        @map("ia_texto")
-  iaImagem           AiProvider        @map("ia_imagem")
-  tipoArtigo         ArticleType       @map("tipo_artigo")
-  temas              String[]
-  intervaloMin       Int               @map("intervalo_min")
-  maxArtigos         Int?              @map("max_artigos")
-  geradosCount       Int               @default(0) @map("gerados_count")
-  statusWp           WpPostStatus      @default(PUBLISH) @map("status_wp")
-  promptCustomizado  String?           @map("prompt_customizado")
-  status             LineStatus        @default(ATIVA)
-  pauseReason        String?           @map("pause_reason")
-  rateLimitBehavior  RateLimitBehavior @default(ADIAR) @map("rate_limit_behavior")
-  consecutiveFailures Int              @default(0) @map("consecutive_failures")
-  nextRunAt          DateTime?         @map("next_run_at")
-  lastRunAt          DateTime?         @map("last_run_at")
+  id                  String            @id @default(cuid())
+  userId              String            @map("user_id")
+  wpSiteId            String            @map("wp_site_id")
+  nome                String
+  categoriaWpId       Int?              @map("categoria_wp_id")
+  categoriaWpNome     String?           @map("categoria_wp_nome")
+  iaTexto             AiProvider        @map("ia_texto")
+  iaImagem            AiProvider        @map("ia_imagem")
+  tipoArtigo          ArticleType       @map("tipo_artigo")
+  temas               String[]
+  intervaloMin        Int               @map("intervalo_min")
+  maxArtigos          Int?              @map("max_artigos")
+  geradosCount        Int               @default(0) @map("gerados_count")
+  statusWp            WpPostStatus      @default(PUBLISH) @map("status_wp")
+  promptCustomizado   String?           @map("prompt_customizado")
+  status              LineStatus        @default(ATIVA)
+  pauseReason         String?           @map("pause_reason")
+  rateLimitBehavior   RateLimitBehavior @default(ADIAR) @map("rate_limit_behavior")
+  consecutiveFailures Int               @default(0) @map("consecutive_failures")
+  nextRunAt           DateTime?         @map("next_run_at")
+  lastRunAt           DateTime?         @map("last_run_at")
   // Lock de execução do scheduler cron+Postgres (substituiu o lock via Redis
   // do BullMQ) — ver DECISIONS.md "scheduler cron+Postgres". lockedAt nulo =
   // linha livre para ser reivindicada; não-nulo = alguma instância do worker
@@ -258,13 +258,13 @@ model ProductionLine {
   // LINE_LOCK_STALE_MS em apps/worker/src/postgres-line-lock.ts). lockedBy
   // guarda o workerId só para depuração (não é usado por nenhuma lógica de
   // lock, que depende exclusivamente de lockedAt).
-  lockedAt           DateTime?         @map("locked_at")
-  lockedBy           String?           @map("locked_by")
-  createdAt          DateTime          @default(now()) @map("created_at")
-  updatedAt          DateTime          @updatedAt @map("updated_at")
+  lockedAt            DateTime?         @map("locked_at")
+  lockedBy            String?           @map("locked_by")
+  createdAt           DateTime          @default(now()) @map("created_at")
+  updatedAt           DateTime          @updatedAt @map("updated_at")
 
-  user            User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
-  wpSite          WpSite                @relation(fields: [wpSiteId], references: [id], onDelete: Restrict)
+  user            User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  wpSite          WpSite               @relation(fields: [wpSiteId], references: [id], onDelete: Restrict)
   referenceImages LineReferenceImage[]
   titleQueue      TitleQueueItem[]
   articles        Article[]
@@ -305,36 +305,36 @@ model TitleQueueItem {
 }
 
 model Article {
-  id           String        @id @default(cuid())
-  userId       String        @map("user_id")
-  lineId       String?       @map("line_id")
-  titleQueueId String?       @unique @map("title_queue_id")
-  wpSiteId     String        @map("wp_site_id")
-  titulo       String
-  tema         String?
-  tipo         ArticleType
-  origem       ArticleOrigin
-  promptCustomizado String? @map("prompt_customizado")
-  iaTexto      AiProvider?   @map("ia_texto")
-  iaImagem     AiProvider?   @map("ia_imagem")
+  id                String        @id @default(cuid())
+  userId            String        @map("user_id")
+  lineId            String?       @map("line_id")
+  titleQueueId      String?       @unique @map("title_queue_id")
+  wpSiteId          String        @map("wp_site_id")
+  titulo            String
+  tema              String?
+  tipo              ArticleType
+  origem            ArticleOrigin
+  promptCustomizado String?       @map("prompt_customizado")
+  iaTexto           AiProvider?   @map("ia_texto")
+  iaImagem          AiProvider?   @map("ia_imagem")
   /// Model id efetivamente usado (ex.: "deepseek/deepseek-v4-flash-0731"). Nulo em artigos anteriores a 2026-11-25.
-  modeloTexto  String?       @map("modelo_texto")
-  modeloImagem String?       @map("modelo_imagem")
-  categoriaWpId Int?         @map("categoria_wp_id")
-  wpStatusAlvo WpPostStatus  @default(PUBLISH) @map("wp_status_alvo")
-  status       ArticleStatus @default(PROCESSANDO)
-  contentHtml  String?       @map("content_html")
-  excerpt      String?
-  slug         String?
-  imageUrl     String?       @map("image_url")
-  wpMediaId    Int?          @map("wp_media_id")
-  wpPostId     Int?          @map("wp_post_id")
-  wpUrl        String?       @map("wp_url")
-  erroMsg      String?       @map("erro_msg")
-  idempotencyKey String?     @unique @map("idempotency_key")
-  createdAt    DateTime      @default(now()) @map("created_at")
-  updatedAt    DateTime      @updatedAt @map("updated_at")
-  publishedAt  DateTime?     @map("published_at")
+  modeloTexto       String?       @map("modelo_texto")
+  modeloImagem      String?       @map("modelo_imagem")
+  categoriaWpId     Int?          @map("categoria_wp_id")
+  wpStatusAlvo      WpPostStatus  @default(PUBLISH) @map("wp_status_alvo")
+  status            ArticleStatus @default(PROCESSANDO)
+  contentHtml       String?       @map("content_html")
+  excerpt           String?
+  slug              String?
+  imageUrl          String?       @map("image_url")
+  wpMediaId         Int?          @map("wp_media_id")
+  wpPostId          Int?          @map("wp_post_id")
+  wpUrl             String?       @map("wp_url")
+  erroMsg           String?       @map("erro_msg")
+  idempotencyKey    String?       @unique @map("idempotency_key")
+  createdAt         DateTime      @default(now()) @map("created_at")
+  updatedAt         DateTime      @updatedAt @map("updated_at")
+  publishedAt       DateTime?     @map("published_at")
 
   user                 User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
   line                 ProductionLine?       @relation(fields: [lineId], references: [id], onDelete: SetNull)
@@ -357,13 +357,17 @@ model Article {
 // ---------------------------------------------------------------------------
 
 model AiModelSettings {
-  id            String      @id @default(cuid())
-  userId        String      @unique @map("user_id")
-  textProvider  AiProvider? @map("text_provider")
-  textModel     String?     @map("text_model")
-  imageProvider AiProvider? @map("image_provider")
-  imageModel    String?     @map("image_model")
-  updatedAt     DateTime    @updatedAt @map("updated_at")
+  id             String      @id @default(cuid())
+  userId         String      @unique @map("user_id")
+  textProvider   AiProvider? @map("text_provider")
+  textModel      String?     @map("text_model")
+  // Nome amigável do catálogo do OpenRouter, gravado ao salvar — só para
+  // exibição. Nulo → a tela mostra o ID. Ver DECISIONS.md 2026-11-26.
+  textModelName  String?     @map("text_model_name")
+  imageProvider  AiProvider? @map("image_provider")
+  imageModel     String?     @map("image_model")
+  imageModelName String?     @map("image_model_name")
+  updatedAt      DateTime    @updatedAt @map("updated_at")
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 

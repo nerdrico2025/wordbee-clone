@@ -1,3 +1,5 @@
+import type { ModelDisplay } from "@wordbee/shared";
+
 export interface SiteOption {
   id: string;
   nome: string;
@@ -13,6 +15,7 @@ export type ProviderValue = "OPENAI" | "GEMINI" | "GROK" | "STABILITY" | "OPENRO
 export interface ProviderOption {
   provider: ProviderValue;
   nome: string;
-  modeloLabel: string;
+  /** Modelo ativo resolvido no servidor; revalidado no cliente por useActiveModels. */
+  modelo: ModelDisplay;
   suportaImagensReferencia?: boolean;
 }

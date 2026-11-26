@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 import { Cpu, FlaskConical, RotateCcw } from "lucide-react";
 import type { OpenRouterModelInfo } from "@wordbee/shared";
 import { Card, CardContent } from "@/components/ui/Card";
@@ -10,6 +11,7 @@ import { useToast } from "@/components/ui/Toast";
 import type { AiModelSlotView, AiModelsView } from "@/lib/ai-model-settings";
 import { ModelCombobox } from "./ModelCombobox";
 import { formatContext, formatModelPrice } from "./model-combobox-logic";
+import { notifyActiveModelsChanged } from "@/components/ai-models/useActiveModels";
 
 type Tipo = "texto" | "imagem";
 
@@ -120,6 +122,7 @@ function ModelField({
 
 export function AiModelsSection({ initial, openRouterConfigurado }: { initial: AiModelsView; openRouterConfigurado: boolean }) {
   const { toast } = useToast();
+  const router = useRouter();
   const [view, setView] = useState(initial);
   const [textModel, setTextModel] = useState(initial.texto.salvo ?? "");
   const [imageModel, setImageModel] = useState(initial.imagem.salvo ?? "");
@@ -142,6 +145,10 @@ export function AiModelsSection({ initial, openRouterConfigurado }: { initial: A
       setView(data);
       setTextModel(data.texto.salvo ?? "");
       setImageModel(data.imagem.salvo ?? "");
+      // Sem F5: limpa o cache do roteador (as próximas telas já vêm com o
+      // modelo novo) e avisa as abas abertas (modal Nova Linha, cards etc.).
+      router.refresh();
+      notifyActiveModelsChanged();
       toast({
         title: reset ? "Modelos voltaram ao padrão." : "Modelos salvos.",
         description: "Vale a partir da próxima geração, inclusive nas Linhas de Produção (em até 2 minutos).",
@@ -158,7 +165,7 @@ export function AiModelsSection({ initial, openRouterConfigurado }: { initial: A
   const usandoPadrao = !view.texto.salvo && !view.imagem.salvo;
 
   return (
-    <section aria-labelledby="modelos-ia-titulo" className="mt-8">
+    <section id="modelos-de-ia" aria-labelledby="modelos-ia-titulo" className="mt-8 scroll-mt-6">
       <div className="mb-3 flex items-center gap-2">
         <Cpu className="h-5 w-5 text-primary-600" aria-hidden />
         <h2 id="modelos-ia-titulo" className="text-lg font-semibold text-zinc-900 dark:text-white">

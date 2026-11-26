@@ -1,9 +1,11 @@
 import type { AiProviderName } from "./types.js";
 
+// Sem rótulo de modelo aqui de propósito: o modelo exibido vem sempre da
+// configuração resolvida (`resolveModelDisplay` em model-display.ts).
+
 export interface TextProviderInfo {
   provider: AiProviderName;
   nome: string;
-  modeloLabel: string;
   descricao: string;
   keyPrefixPlaceholder: string;
   gratuito?: boolean;
@@ -19,7 +21,6 @@ export const TEXT_PROVIDERS: TextProviderInfo[] = [
   {
     provider: "OPENAI",
     nome: "OpenAI",
-    modeloLabel: "GPT-4o",
     descricao: "Modelo da OpenAI com ótimo custo-benefício para redação de artigos.",
     keyPrefixPlaceholder: "sk-...",
     docsUrl: "https://platform.openai.com/api-keys",
@@ -27,7 +28,6 @@ export const TEXT_PROVIDERS: TextProviderInfo[] = [
   {
     provider: "GEMINI",
     nome: "Gemini",
-    modeloLabel: "Gemini 2.5 Flash",
     descricao: "Rápido, com uma cota diária gratuita generosa do Google.",
     keyPrefixPlaceholder: "AIza...",
     gratuito: true,
@@ -37,7 +37,6 @@ export const TEXT_PROVIDERS: TextProviderInfo[] = [
   {
     provider: "GROK",
     nome: "Grok (xAI)",
-    modeloLabel: "Grok 2",
     descricao: "Modelo da xAI, com boa velocidade de resposta.",
     keyPrefixPlaceholder: "xai-...",
     docsUrl: "https://console.x.ai",
@@ -45,8 +44,7 @@ export const TEXT_PROVIDERS: TextProviderInfo[] = [
   {
     provider: "OPENROUTER",
     nome: "OpenRouter",
-    modeloLabel: "DeepSeek V4",
-    descricao: "Acesso a DeepSeek e outros modelos via um único provedor.",
+    descricao: "Vários modelos (DeepSeek, Claude, GPT…) com uma só chave. O modelo é escolhido em Modelos de IA.",
     keyPrefixPlaceholder: "sk-or-...",
     docsUrl: "https://openrouter.ai/keys",
   },
@@ -56,7 +54,6 @@ export const IMAGE_PROVIDERS: ImageProviderInfo[] = [
   {
     provider: "OPENAI",
     nome: "OpenAI",
-    modeloLabel: "DALL-E 3",
     descricao: "Imagens de alta qualidade geradas pela OpenAI.",
     keyPrefixPlaceholder: "sk-...",
     docsUrl: "https://platform.openai.com/api-keys",
@@ -64,7 +61,6 @@ export const IMAGE_PROVIDERS: ImageProviderInfo[] = [
   {
     provider: "GEMINI",
     nome: "Gemini",
-    modeloLabel: "Nano Banana (Gemini 2.5 Flash Image)",
     descricao: "Suporta imagens de referência para guiar a direção de arte.",
     keyPrefixPlaceholder: "AIza...",
     gratuito: true,
@@ -75,7 +71,6 @@ export const IMAGE_PROVIDERS: ImageProviderInfo[] = [
   {
     provider: "GROK",
     nome: "Grok",
-    modeloLabel: "Grok Imagine",
     descricao: "Geração de imagem da xAI.",
     keyPrefixPlaceholder: "xai-...",
     docsUrl: "https://console.x.ai",
@@ -83,7 +78,6 @@ export const IMAGE_PROVIDERS: ImageProviderInfo[] = [
   {
     provider: "STABILITY",
     nome: "Stability AI",
-    modeloLabel: "Stable Diffusion 3.5",
     descricao: "Créditos grátis para novos usuários.",
     keyPrefixPlaceholder: "sk-...",
     gratuito: true,
@@ -93,8 +87,7 @@ export const IMAGE_PROVIDERS: ImageProviderInfo[] = [
   {
     provider: "OPENROUTER",
     nome: "OpenRouter",
-    modeloLabel: "Nano Banana",
-    descricao: "Gemini 2.5 Flash Image via OpenRouter. Mesma chave já cadastrada na aba de texto.",
+    descricao: "Modelos de imagem via OpenRouter, escolhidos em Modelos de IA. Mesma chave já cadastrada na aba de texto.",
     keyPrefixPlaceholder: "sk-or-...",
     docsUrl: "https://openrouter.ai/keys",
     suportaImagensReferencia: true,

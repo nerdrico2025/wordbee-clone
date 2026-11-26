@@ -67,6 +67,7 @@ export function HistoricoClient({ articles, total, page, pageSize, sites, lines 
                   <th className="px-4 py-3 font-medium">Site</th>
                   <th className="px-4 py-3 font-medium">Tipo</th>
                   <th className="px-4 py-3 font-medium">Origem</th>
+                  <th className="px-4 py-3 font-medium">Modelo</th>
                   <th className="px-4 py-3 font-medium">Data</th>
                   <th className="px-4 py-3 font-medium">Status</th>
                   <th className="px-4 py-3 font-medium">Ações</th>
@@ -99,6 +100,10 @@ function ArticleRow({ article }: { article: HistoricoArticle }) {
       <td className="px-4 py-3 text-zinc-500 dark:text-zinc-400">{article.siteNome}</td>
       <td className="px-4 py-3 text-zinc-500 dark:text-zinc-400">{TYPE_LABELS[article.tipo] ?? article.tipo}</td>
       <td className="px-4 py-3 text-zinc-500 dark:text-zinc-400">{article.origem === "MANUAL" ? "Manual" : article.lineNome}</td>
+      <td className="max-w-[14rem] px-4 py-3 text-xs text-zinc-500 dark:text-zinc-400">
+        <ModelLine rotulo="Texto" nome={article.modeloTextoNome} id={article.modeloTexto} />
+        <ModelLine rotulo="Imagem" nome={article.modeloImagemNome} id={article.modeloImagem} />
+      </td>
       <td className="px-4 py-3 text-zinc-500 dark:text-zinc-400">{formatDateTime(article.createdAt)}</td>
       <td className="px-4 py-3">
         <Badge variant={STATUS_BADGE[article.status] ?? "neutral"}>{STATUS_LABEL[article.status] ?? article.status}</Badge>
@@ -114,6 +119,15 @@ function ArticleRow({ article }: { article: HistoricoArticle }) {
         </div>
       </td>
     </tr>
+  );
+}
+
+/** Modelo gravado no artigo; o ID completo fica no tooltip. Artigos antigos mostram "—". */
+function ModelLine({ rotulo, nome, id }: { rotulo: string; nome: string; id: string | null }) {
+  return (
+    <p className="truncate" title={id ? `${rotulo}: ${id}` : `${rotulo}: não registrado (artigo anterior ao registro de modelo)`}>
+      <span className="text-zinc-400">{rotulo}:</span> {nome}
+    </p>
   );
 }
 

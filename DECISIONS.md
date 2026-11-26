@@ -61,6 +61,19 @@ Fonte original: `distribuicao-wordbee-especificacao.md` §7 e `plano-acao-claude
 
 ---
 
+## Rótulo de modelo dinâmico nas telas (2026-11-26)
+
+- **Problema**: depois do modelo configurável (2026-11-25), a geração já usava o modelo do painel, mas os selects mostravam o `modeloLabel` fixo do registry (ex.: "OpenRouter (DeepSeek V4)", "OpenRouter (Nano Banana)"). O rótulo do Gemini texto ("Gemini 2.5 Flash") também já divergia do padrão real (`gemini-3.6-flash`).
+- **Decisão**: `modeloLabel` foi removido do registry. Toda tela monta o rótulo com `resolveModelDisplay` (`packages/shared/src/ai/model-display.ts`), que chama o mesmo `resolveModel` usado pela geração, com as mesmas settings lidas por `getAiModelSettings`. Assim a tela não tem como divergir do que roda. Formato: `"<Provedor> (<nome amigável>)"`, com fallback para o ID.
+- **De onde vem o nome amigável**: (1) do painel: no PUT de Modelos de IA, o servidor procura o ID no catálogo do OpenRouter (cache de 10 min, normalmente já aquecido pela tela) e grava o nome em `ai_model_settings.text_model_name`/`image_model_name`. Se o catálogo falhar, o nome fica nulo e o save continua. (2) Dos padrões do código e de envs conhecidas: `KNOWN_MODEL_NAMES`, com um teste que exige nome para todo `CODE_DEFAULT_MODELS`. (3) Sem nome: o ID. **Alternativa descartada**: consultar o catálogo ao renderizar cada tela, que deixaria cada página dependente da latência do OpenRouter (timeout de 15s).
+- O nome gravado só vale quando o modelo resolvido veio do painel. Um modelo vindo da env nunca herda o nome salvo.
+- **Sem F5**: `GET /api/settings/ai-models/active` (sem cache) mais o hook `useActiveModels`, que revalida ao montar, no `focus` e via `BroadcastChannel("wordbee:ai-models-updated")`. Depois de salvar: `revalidatePath("/", "layout")` no servidor e `router.refresh()` no cliente. No Next 14 a rota de API não limpa o Router Cache do cliente sozinha, por isso o `router.refresh()` e o refetch ao montar.
+- **Selects**: continuam escolhendo só o provedor. A opção mostra o rótulo dinâmico e, abaixo, "Modelo ativo: X · Trocar modelo" (link para `/chaves-de-api#modelos-de-ia`) com a nota "O modelo vale para todas as linhas e é lido a cada execução". Em Criar Artigo, a nota diz "todas as gerações".
+- **Histórico**: mostra o modelo **gravado no artigo** (`modelo_texto`/`modelo_imagem`), não o ativo. Artigos anteriores a 2026-11-25 mostram "—".
+- **Migration** `20261126120000_add_ai_model_names`: duas colunas nullable, aditiva e idempotente. Vai antes do deploy, como a anterior. O worker não lê essas colunas.
+
+---
+
 ## Modelo de IA configurável pelo painel, com fallback para env (2026-11-25)
 
 - **Decisão**: o model id (texto e imagem) passa a ser configurável na tela **Chaves de API → Modelos de IA**, salvo no banco (tabela `ai_model_settings`, uma linha por usuário). Ordem de resolução em `resolveModelId` (`packages/shared/src/ai/models.ts`): **painel → env → padrão do código**. Nulo ou vazio cai para o próximo nível, então "Voltar ao padrão" só grava nulo. Trocar o modelo não exige mais editar env nem redeploy.

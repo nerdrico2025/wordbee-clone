@@ -2,6 +2,7 @@ import { notFound, redirect } from "next/navigation";
 import { prisma } from "@wordbee/db";
 import { getCurrentSession } from "@/lib/auth";
 import { LineDetailClient } from "@/components/production-lines/LineDetailClient";
+import { getActiveModels } from "@/lib/ai-model-settings";
 
 export default async function LineDetailPage({ params }: { params: { id: string } }) {
   const session = await getCurrentSession();
@@ -17,9 +18,11 @@ export default async function LineDetailPage({ params }: { params: { id: string 
     },
   });
   if (!line) notFound();
+  const activeModels = await getActiveModels(session.user.id);
 
   return (
     <LineDetailClient
+      activeModels={activeModels}
       initial={{
         id: line.id,
         nome: line.nome,

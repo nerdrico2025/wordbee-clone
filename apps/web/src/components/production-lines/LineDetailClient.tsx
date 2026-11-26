@@ -12,11 +12,15 @@ import { ReferenceImagesSection } from "@/components/production-lines/ReferenceI
 import { TitleQueueSection } from "@/components/production-lines/TitleQueueSection";
 import { PublishedArticlesSection } from "@/components/production-lines/PublishedArticlesSection";
 import type { ProductionLineDetail } from "@/lib/production-line-types";
+import { LineModels } from "@/components/production-lines/LineModels";
+import { useActiveModels } from "@/components/ai-models/useActiveModels";
+import type { ActiveModelsPayload } from "@/components/ai-models/active-models-logic";
 
 const TYPE_LABELS = Object.fromEntries(ARTICLE_TYPE_OPTIONS.map((t) => [t.value, t.label]));
 
-export function LineDetailClient({ initial }: { initial: ProductionLineDetail }) {
+export function LineDetailClient({ initial, activeModels }: { initial: ProductionLineDetail; activeModels: ActiveModelsPayload }) {
   const { toast } = useToast();
+  const ativos = useActiveModels(activeModels) ?? activeModels;
   const [line, setLine] = useState(initial);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -61,6 +65,9 @@ export function LineDetailClient({ initial }: { initial: ProductionLineDetail })
             <span>{line.geradosCount}/{line.maxArtigos ?? "∞"}</span>
           </div>
           <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">Temas: {line.temas.join(", ")}</p>
+          <div className="mt-2">
+            <LineModels iaTexto={line.iaTexto} iaImagem={line.iaImagem} activeModels={ativos} />
+          </div>
         </div>
         <Button variant="secondary" onClick={handleRefresh} loading={refreshing}>
           <RefreshCw className="h-4 w-4" /> Atualizar

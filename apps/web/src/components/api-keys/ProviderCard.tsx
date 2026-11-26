@@ -75,7 +75,7 @@ export function ProviderCard({
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <h3 className="text-base font-semibold text-zinc-900 dark:text-white">{card.nome}</h3>
-            <Badge variant="purple">{card.modeloLabel}</Badge>
+            <Badge variant="purple" title={`Modelo em uso: ${card.modelo.modelId}`}>{card.modelo.nome}</Badge>
             {card.gratuito && <Badge variant="success">Gratuito</Badge>}
           </div>
           <a

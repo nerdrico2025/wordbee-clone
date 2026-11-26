@@ -5,9 +5,16 @@ import { ShieldCheck } from "lucide-react";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/Tabs";
 import { ProviderCard } from "@/components/api-keys/ProviderCard";
 import type { ApiKeyCard } from "@/lib/api-keys";
+import { useActiveModels } from "@/components/ai-models/useActiveModels";
+import { withActiveModels } from "@/components/ai-models/active-models-logic";
 
 export function ApiKeysClient({ initial }: { initial: { texto: ApiKeyCard[]; imagem: ApiKeyCard[] } }) {
-  const [cards, setCards] = useState(initial);
+  const [cardsSalvos, setCards] = useState(initial);
+  // O badge de modelo de cada card acompanha Modelos de IA sem F5.
+  const ativos = useActiveModels();
+  const cards = ativos
+    ? { texto: withActiveModels(cardsSalvos.texto, ativos.texto), imagem: withActiveModels(cardsSalvos.imagem, ativos.imagem) }
+    : cardsSalvos;
 
   return (
     <div>

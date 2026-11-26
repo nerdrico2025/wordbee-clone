@@ -201,8 +201,9 @@ Schema completo em `packages/db/prisma/schema.prisma`. Comentário no topo do ar
 | `20260831140000_add_distribution_facebook_pages` | 2026-08-31 14:00 | Distribuição: trilho automático (Páginas do Facebook) |
 | `20260831180000_add_distribuicao_trilho_assistido` | 2026-08-31 18:00 | Distribuição: trilho assistido (grupos parceiros, perfis, fila manual) |
 | `20261125120000_add_ai_model_settings` | 2026-11-25 12:00 | Tabela `ai_model_settings` + `articles.modelo_texto`/`modelo_imagem` (aditiva) — **aplicar em produção antes do deploy** |
+| `20261126120000_add_ai_model_names` | 2026-11-26 12:00 | `ai_model_settings.text_model_name`/`image_model_name` (nullable, aditiva, idempotente) — **aplicar em produção antes do deploy** |
 
-**Estado em 2026-11-25, confirmado por `prisma migrate status` contra o Postgres de produção do VPS** (leitura apenas, a partir da máquina de desenvolvimento): das 10 migrations do repositório, as 9 primeiras estão aplicadas e só `20261125120000_add_ai_model_settings` está pendente. Ela deve ser aplicada antes do deploy do código que a usa (seção 9.1). Isso vale para o instante da checagem: o processo de deploy não garante nada automaticamente.
+**Estado em 2026-11-25, confirmado por `prisma migrate status` contra o Postgres de produção do VPS** (leitura apenas, a partir da máquina de desenvolvimento): das 10 migrations do repositório, as 9 primeiras estão aplicadas e só `20261125120000_add_ai_model_settings` está pendente. Ela deve ser aplicada antes do deploy do código que a usa (seção 9.1). Em 2026-11-26 entrou `20261126120000_add_ai_model_names` (11ª), que também fica pendente até ser aplicada, antes do deploy; não houve nova checagem contra produção. Isso vale para o instante da checagem: o processo de deploy não garante nada automaticamente.
 
 Histórico: até 2026-09-28 o banco de produção era o Neon. Lá a migration `20260830120000` chegou a ser deployada em código antes de ser aplicada, o que causou um `P2022` por ~9h (seção 8, item 16). ⚠ Não confirmado por código se o banco do VPS recebeu o dump completo do Neon ou foi recriado por `migrate deploy` + seed. O README descreve o roteiro do dump, e o fato de as 9 migrations constarem em `_prisma_migrations` é consistente com as duas hipóteses.
 
@@ -294,10 +295,20 @@ O model id de texto e de imagem do **OpenRouter** é escolhido na tela **Chaves 
 - **Resolução**: `resolveModelId(kind, provider, settings)` em `packages/shared/src/ai/models.ts`, na ordem painel → env (`OPENROUTER_DEFAULT_MODEL` / `OPENROUTER_IMAGE_DEFAULT_MODEL`; demais provedores com suas envs de sempre) → padrão do código (`CODE_DEFAULT_MODELS`). O modelo do painel só vale para o provedor gravado com ele.
 - **Quem lê**: web (Criar Artigo, reenvio, sugestão de títulos, fila de títulos da linha) a cada geração, sem cache. Worker (linhas e copy/álbum de distribuição) a cada execução, com cache ≤60s (`apps/worker/src/ai-model-settings.ts`). **Nenhuma troca exige restart ou redeploy.**
 - **Rotas**: `GET/PUT /api/settings/ai-models`, `GET /api/settings/ai-models/catalog?tipo=texto|imagem` (cache 10 min; falha → lista vazia), `POST /api/settings/ai-models/test` (texto: chamada mínima; imagem: só confere que o ID existe, sem gerar).
-- **Rastro por artigo**: `articles.modelo_texto` / `modelo_imagem` (nullable; nulo nos artigos anteriores a 2026-11-25). Ainda não aparecem no Histórico.
+- **Rastro por artigo**: `articles.modelo_texto` / `modelo_imagem` (nullable; nulo nos artigos anteriores a 2026-11-25). Aparecem no Histórico (coluna "Modelo"; "—" nos artigos antigos) desde 2026-11-26.
 - **Logs**: o log estruturado `openrouter_call` agora inclui o campo `modelo`.
 
 Fonte: `DECISIONS.md` "Modelo de IA configurável pelo painel, com fallback para env" (2026-11-25).
+
+### 7.4 Rótulo de modelo dinâmico nas telas (2026-11-26)
+
+Nenhuma tela mostra mais rótulo de modelo fixo. O campo `modeloLabel` saiu do registry (`packages/shared/src/ai/registry.ts`). O rótulo vem de `resolveModelDisplay(kind, provider, settings)` (`packages/shared/src/ai/model-display.ts`), que usa o mesmo `resolveModel` da geração e a mesma leitura do banco (`getAiModelSettings`). Formato: `"<Provedor> (<nome amigável>)"`. O nome vem do catálogo do OpenRouter, gravado ao salvar (`ai_model_settings.text_model_name`/`image_model_name`), ou do mapa `KNOWN_MODEL_NAMES` para os padrões do código. Sem nome, a tela mostra o ID.
+
+- **Telas que mudaram**: modal Nova Linha e Criar Artigo (opção do select com o rótulo dinâmico, mais "Modelo ativo: X · Trocar modelo" e a nota "O modelo vale para todas as linhas e é lido a cada execução"); cards da linha e página de detalhe (modelo em uso de texto e imagem, resolvido agora, com a mesma nota e o link); Chaves de API (badge de cada card de provedor); Histórico (nova coluna "Modelo" com texto e imagem gravados no artigo, ID completo no tooltip, "—" nos artigos antigos). O Dashboard não mostra modelo e não mudou.
+- **Atualização sem F5**: `GET /api/settings/ai-models/active` devolve o modelo ativo por provedor. O hook `useActiveModels` (`apps/web/src/components/ai-models/`) revalida ao montar, ao focar a aba e quando Modelos de IA avisa via `BroadcastChannel` que salvou. O PUT de Modelos de IA chama `revalidatePath("/", "layout")`, e a tela chama `router.refresh()`.
+- **Linha guarda só o provedor**: o modelo exibido no card ou no detalhe é o resolvido agora, não um valor gravado na linha. O Histórico mostra o modelo gravado no artigo, que pode ser diferente do ativo.
+
+Fonte: `DECISIONS.md` "Rótulo de modelo dinâmico nas telas" (2026-11-26).
 
 ---
 

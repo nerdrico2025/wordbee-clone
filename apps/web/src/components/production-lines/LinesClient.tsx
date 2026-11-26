@@ -10,6 +10,8 @@ import { LineCard } from "@/components/production-lines/LineCard";
 import { NewLineModal } from "@/components/production-lines/NewLineModal";
 import type { ProductionLineSummary } from "@/lib/production-line-types";
 import type { ProviderOption, SiteOption } from "@/lib/criar-artigo-types";
+import { useActiveModels } from "@/components/ai-models/useActiveModels";
+import { withActiveModels, type ActiveModelsPayload } from "@/components/ai-models/active-models-logic";
 
 interface Props {
   initialLines: ProductionLineSummary[];
@@ -17,10 +19,23 @@ interface Props {
   textProviders: ProviderOption[];
   imageProviders: ProviderOption[];
   canCreate: boolean;
+  activeModels: ActiveModelsPayload;
 }
 
-export function LinesClient({ initialLines, sites, textProviders, imageProviders, canCreate }: Props) {
+export function LinesClient({
+  initialLines,
+  sites,
+  textProviders: textProvidersIniciais,
+  imageProviders: imageProvidersIniciais,
+  canCreate,
+  activeModels: activeModelsIniciais,
+}: Props) {
   const [lines, setLines] = useState(initialLines);
+  // Revalida o modelo ativo sem F5: ao montar, ao focar a aba e quando
+  // Modelos de IA avisa que salvou.
+  const ativos = useActiveModels(activeModelsIniciais) ?? activeModelsIniciais;
+  const textProviders = withActiveModels(textProvidersIniciais, ativos.texto);
+  const imageProviders = withActiveModels(imageProvidersIniciais, ativos.imagem);
   const [modalOpen, setModalOpen] = useState(false);
 
   function handleChanged(updated: ProductionLineSummary) {
@@ -61,7 +76,7 @@ export function LinesClient({ initialLines, sites, textProviders, imageProviders
       ) : (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {lines.map((line) => (
-            <LineCard key={line.id} line={line} onChanged={handleChanged} />
+            <LineCard key={line.id} line={line} onChanged={handleChanged} activeModels={ativos} />
           ))}
         </div>
       )}

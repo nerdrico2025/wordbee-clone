@@ -12,6 +12,8 @@ import { useToast } from "@/components/ui/Toast";
 import { formatInterval } from "@/lib/interval-options";
 import { ARTICLE_TYPE_OPTIONS } from "@/lib/article-type-options";
 import type { ProductionLineSummary } from "@/lib/production-line-types";
+import { LineModels } from "@/components/production-lines/LineModels";
+import type { ActiveModelsPayload } from "@/components/ai-models/active-models-logic";
 
 const TYPE_LABELS = Object.fromEntries(ARTICLE_TYPE_OPTIONS.map((t) => [t.value, t.label]));
 
@@ -20,7 +22,15 @@ function formatDateTime(iso: string | null): string {
   return new Date(iso).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", year: "2-digit", hour: "2-digit", minute: "2-digit" });
 }
 
-export function LineCard({ line, onChanged }: { line: ProductionLineSummary; onChanged: (line: ProductionLineSummary) => void }) {
+export function LineCard({
+  line,
+  onChanged,
+  activeModels,
+}: {
+  line: ProductionLineSummary;
+  onChanged: (line: ProductionLineSummary) => void;
+  activeModels: ActiveModelsPayload;
+}) {
   const { toast } = useToast();
   const [loading, setLoading] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -88,6 +98,10 @@ export function LineCard({ line, onChanged }: { line: ProductionLineSummary; onC
         </div>
 
         <p className="mt-2 truncate text-xs text-zinc-500 dark:text-zinc-400">Tema: {line.temas.join(", ")}</p>
+
+        <div className="mt-2">
+          <LineModels iaTexto={line.iaTexto} iaImagem={line.iaImagem} activeModels={activeModels} />
+        </div>
 
         {line.maxArtigos && (
           <div className="mt-2">

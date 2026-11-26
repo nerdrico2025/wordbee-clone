@@ -31,8 +31,11 @@ function matchesWhere(row: FakeApiKeyRow, where: Record<string, unknown> = {}): 
   });
 }
 
+let modelSettings: Record<string, unknown> | null = null;
+
 vi.mock("@wordbee/db", () => ({
   prisma: {
+    aiModelSettings: { findUnique: vi.fn(async () => modelSettings) },
     apiKey: {
       findMany: vi.fn(async ({ where }: { where?: Record<string, unknown> } = {}) => rows.filter((r) => matchesWhere(r, where))),
       deleteMany: vi.fn(async ({ where }: { where?: Record<string, unknown> } = {}) => {
@@ -44,7 +47,7 @@ vi.mock("@wordbee/db", () => ({
   },
 }));
 
-const { deleteApiKey, listApiKeyCards } = await import("./api-keys");
+const { deleteApiKey, listApiKeyCards, listConfiguredProviders } = await import("./api-keys");
 
 const USER_ID = "user-1";
 
@@ -124,5 +127,38 @@ describe("deleteApiKey", () => {
     const cards = await listApiKeyCards(USER_ID);
     expect(cards.texto.find((c) => c.provider === "OPENAI")?.configured).toBe(false);
     expect(cards.texto.find((c) => c.provider === "GROK")?.configured).toBe(true);
+  });
+});
+
+describe("rótulo de modelo dinâmico (listConfiguredProviders / listApiKeyCards)", () => {
+  beforeEach(() => {
+    rows = [];
+    nextId = 1;
+    modelSettings = null;
+    delete process.env.OPENROUTER_DEFAULT_MODEL;
+  });
+
+  it("sem configuração: rótulo do padrão do código, não texto fixo do registry", async () => {
+    seedKey("OPENROUTER", "AMBOS");
+    const [texto] = await listConfiguredProviders(USER_ID, "TEXTO");
+    expect(texto!.modelo).toMatchObject({ modelId: "deepseek/deepseek-v4-flash-0731", label: "OpenRouter (DeepSeek V4 Flash)", origem: "padrao" });
+  });
+
+  it("segue o modelo salvo em Modelos de IA", async () => {
+    seedKey("OPENROUTER", "AMBOS");
+    modelSettings = { textProvider: null, textModel: null, textModelName: null, imageProvider: "OPENROUTER", imageModel: "openai/gpt-image-1", imageModelName: "OpenAI: GPT Image 1" };
+    const [imagem] = await listConfiguredProviders(USER_ID, "IMAGEM");
+    expect(imagem!.modelo.label).toBe("OpenRouter (OpenAI: GPT Image 1)");
+    const cards = await listApiKeyCards(USER_ID);
+    expect(cards.imagem.find((c) => c.provider === "OPENROUTER")!.modelo.nome).toBe("OpenAI: GPT Image 1");
+  });
+
+  it("campo nulo no painel cai para a env", async () => {
+    seedKey("OPENROUTER", "AMBOS");
+    process.env.OPENROUTER_DEFAULT_MODEL = "meta/llama-9";
+    modelSettings = { textProvider: null, textModel: null, textModelName: null, imageProvider: null, imageModel: null, imageModelName: null };
+    const [texto] = await listConfiguredProviders(USER_ID, "TEXTO");
+    expect(texto!.modelo).toMatchObject({ modelId: "meta/llama-9", label: "OpenRouter (meta/llama-9)", origem: "env" });
+    delete process.env.OPENROUTER_DEFAULT_MODEL;
   });
 });

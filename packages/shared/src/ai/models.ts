@@ -45,6 +45,9 @@ export interface AiModelSettings {
   textModel?: string | null;
   imageProvider?: AiProviderName | null;
   imageModel?: string | null;
+  /** Nome amigável do catálogo, gravado ao salvar (só para exibição; nulo → a tela mostra o ID). */
+  textModelName?: string | null;
+  imageModelName?: string | null;
 }
 
 export type ModelOrigem = "painel" | "env" | "padrao";
@@ -61,8 +64,9 @@ export function resolveModel(
   kind: ModelKind,
   provider: AiProviderName,
   settings?: AiModelSettings | null,
-  env: EnvLike = process.env
+  env?: EnvLike
 ): { modelId: string; origem: ModelOrigem } {
+  env ??= process.env;
   const painelProvider = kind === "text" ? settings?.textProvider : settings?.imageProvider;
   const painelModel = clean(kind === "text" ? settings?.textModel : settings?.imageModel);
   if (painelModel && painelProvider === provider) return { modelId: painelModel, origem: "painel" };

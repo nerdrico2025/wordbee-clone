@@ -4,6 +4,9 @@ export interface ProductionLineSummary {
   status: "ATIVA" | "PAUSADA" | "CONCLUIDA";
   wpSite: { nome: string };
   tipoArtigo: string;
+  /** Provedores da linha; o modelo de cada um é global (Modelos de IA) e resolvido a cada execução. */
+  iaTexto: string;
+  iaImagem: string;
   intervaloMin: number;
   temas: string[];
   maxArtigos: number | null;
@@ -38,8 +41,6 @@ export interface ProductionLineDetail extends ProductionLineSummary {
   wpSiteId: string;
   categoriaWpId: number | null;
   categoriaWpNome: string | null;
-  iaTexto: string;
-  iaImagem: string;
   statusWp: "PUBLISH" | "DRAFT";
   promptCustomizado: string | null;
   rateLimitBehavior: string;

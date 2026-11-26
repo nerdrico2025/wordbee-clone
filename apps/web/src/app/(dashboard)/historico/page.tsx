@@ -3,6 +3,8 @@ import { Prisma, prisma } from "@wordbee/db";
 import type { ArticleStatus } from "@wordbee/db";
 import { getCurrentSession } from "@/lib/auth";
 import { HistoricoClient } from "@/components/historico/HistoricoClient";
+import { toHistoricoModelos } from "@/lib/historico";
+import { getAiModelSettings, savedModelNames } from "@/lib/ai-model-settings";
 
 const PAGE_SIZE = 20;
 
@@ -29,7 +31,7 @@ export default async function HistoricoPage({
     if (searchParams.ate) where.createdAt.lte = new Date(`${searchParams.ate}T23:59:59`);
   }
 
-  const [articles, total, sites, lines] = await Promise.all([
+  const [articles, total, sites, lines, modelSettings] = await Promise.all([
     prisma.article.findMany({
       where,
       orderBy: { createdAt: "desc" },
@@ -40,7 +42,9 @@ export default async function HistoricoPage({
     prisma.article.count({ where }),
     prisma.wpSite.findMany({ where: { userId }, orderBy: { nome: "asc" }, select: { id: true, nome: true } }),
     prisma.productionLine.findMany({ where: { userId }, orderBy: { nome: "asc" }, select: { id: true, nome: true } }),
+    getAiModelSettings(userId),
   ]);
+  const nomesModelos = savedModelNames(modelSettings);
 
   return (
     <HistoricoClient
@@ -55,6 +59,7 @@ export default async function HistoricoPage({
         wpUrl: a.wpUrl,
         erroMsg: a.erroMsg,
         createdAt: a.createdAt.toISOString(),
+        ...toHistoricoModelos(a, nomesModelos),
       }))}
       total={total}
       page={page}

@@ -1,4 +1,6 @@
-export interface HistoricoArticle {
+import type { HistoricoModelos } from "./historico";
+
+export interface HistoricoArticle extends HistoricoModelos {
   id: string;
   titulo: string;
   tipo: string;

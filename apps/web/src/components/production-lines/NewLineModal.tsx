@@ -12,6 +12,8 @@ import { ARTICLE_TYPE_OPTIONS, type ArticleTypeValue } from "@/lib/article-type-
 import { INTERVAL_OPTIONS } from "@/lib/interval-options";
 import type { CategoryOption, ProviderOption, SiteOption } from "@/lib/criar-artigo-types";
 import type { ProductionLineSummary } from "@/lib/production-line-types";
+import { ActiveModelHint } from "@/components/ai-models/ActiveModelHint";
+import { NOTA_MODELO } from "@/components/ai-models/active-models-logic";
 
 interface Props {
   open: boolean;
@@ -176,20 +178,27 @@ export function NewLineModal({ open, onOpenChange, sites, textProviders, imagePr
             ))}
           </Select>
 
-          <Select label="IA para Texto *" value={iaTexto} onChange={(e) => setIaTexto(e.target.value as typeof iaTexto)} required>
-            {textProviders.map((p) => (
-              <option key={p.provider} value={p.provider}>
-                {p.nome} ({p.modeloLabel})
-              </option>
-            ))}
-          </Select>
-          <Select label="IA para Imagem *" value={iaImagem} onChange={(e) => setIaImagem(e.target.value as typeof iaImagem)} required>
-            {imageProviders.map((p) => (
-              <option key={p.provider} value={p.provider}>
-                {p.nome} ({p.modeloLabel})
-              </option>
-            ))}
-          </Select>
+          <div className="flex flex-col gap-1.5">
+            <Select label="IA para Texto *" value={iaTexto} onChange={(e) => setIaTexto(e.target.value as typeof iaTexto)} required>
+              {textProviders.map((p) => (
+                <option key={p.provider} value={p.provider}>
+                  {p.modelo.label}
+                </option>
+              ))}
+            </Select>
+            <ActiveModelHint modelo={textProviders.find((p) => p.provider === iaTexto)?.modelo} nota={false} />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <Select label="IA para Imagem *" value={iaImagem} onChange={(e) => setIaImagem(e.target.value as typeof iaImagem)} required>
+              {imageProviders.map((p) => (
+                <option key={p.provider} value={p.provider}>
+                  {p.modelo.label}
+                </option>
+              ))}
+            </Select>
+            <ActiveModelHint modelo={imageProviders.find((p) => p.provider === iaImagem)?.modelo} nota={false} />
+          </div>
+          <p className="text-xs text-zinc-400 sm:col-span-2">{NOTA_MODELO}</p>
         </div>
 
         <Select label="Tipo de artigo *" value={tipoArtigo} onChange={(e) => setTipoArtigo(e.target.value as ArticleTypeValue)} required>

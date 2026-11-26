@@ -18,7 +18,11 @@ vi.mock("@wordbee/shared", async () => {
   return { ...actual, fetchOpenRouterCatalog, testOpenRouterModel };
 });
 
+const revalidatePath = vi.fn();
+vi.mock("next/cache", () => ({ revalidatePath }));
+
 const settingsRoute = await import("./route.js");
+const activeRoute = await import("./active/route.js");
 const catalogRoute = await import("./catalog/route.js");
 const testRoute = await import("./test/route.js");
 const { clearCatalogCache } = await import("@/lib/ai-model-settings");
@@ -40,18 +44,20 @@ beforeEach(() => {
   getDecryptedApiKey.mockResolvedValue("sk-or-x");
   db.aiModelSettings.findUnique.mockResolvedValue(null);
   db.aiModelSettings.upsert.mockImplementation(async ({ create }: { create: unknown }) => create);
+  fetchOpenRouterCatalog.mockResolvedValue([]);
 });
 
 describe("autenticação", () => {
   it("todas as rotas respondem 401 sem sessão", async () => {
     getCurrentSession.mockResolvedValue(null);
-    const responses = await Promise.all([
+    const responses: Response[] = await Promise.all([
       settingsRoute.GET(),
       settingsRoute.PUT(jsonRequest("https://app.test/api/settings/ai-models", "PUT", { textModel: "a/b" })),
       catalogRoute.GET(jsonRequest("https://app.test/api/settings/ai-models/catalog?tipo=texto", "GET")),
       testRoute.POST(jsonRequest("https://app.test/api/settings/ai-models/test", "POST", { tipo: "texto", modelId: "a/b" })),
     ]);
-    expect(responses.map((r) => r.status)).toEqual([401, 401, 401, 401]);
+    responses.push(await activeRoute.GET());
+    expect(responses.map((r) => r.status)).toEqual([401, 401, 401, 401, 401]);
     expect(db.aiModelSettings.upsert).not.toHaveBeenCalled();
     expect(testOpenRouterModel).not.toHaveBeenCalled();
   });
@@ -101,6 +107,60 @@ describe("GET/PUT /api/settings/ai-models", () => {
   it("PUT rejeita campos desconhecidos", async () => {
     const res = await settingsRoute.PUT(jsonRequest("https://app.test/api/settings/ai-models", "PUT", { userId: "outro" }));
     expect(res.status).toBe(400);
+  });
+});
+
+describe("nome amigável e revalidação ao salvar", () => {
+  it("PUT grava o nome amigável do catálogo junto com o ID", async () => {
+    fetchOpenRouterCatalog.mockImplementation(async (kind: string) =>
+      kind === "text"
+        ? [{ id: "anthropic/claude-sonnet-5.5", nome: "Anthropic: Claude Sonnet 5.5", contexto: null, precoEntradaPorToken: null, precoSaidaPorToken: null, precoPorImagem: null }]
+        : []
+    );
+    await settingsRoute.PUT(
+      jsonRequest("https://app.test/api/settings/ai-models", "PUT", { textModel: "anthropic/claude-sonnet-5.5", imageModel: "x/sem-nome" })
+    );
+    const [args] = db.aiModelSettings.upsert.mock.calls[0] as [{ create: Record<string, unknown> }];
+    expect(args.create).toMatchObject({ textModelName: "Anthropic: Claude Sonnet 5.5", imageModelName: null });
+  });
+
+  it("PUT salva mesmo com o catálogo fora do ar (nome fica nulo → a tela mostra o ID)", async () => {
+    fetchOpenRouterCatalog.mockRejectedValue(new Error("fora do ar"));
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const res = await settingsRoute.PUT(jsonRequest("https://app.test/api/settings/ai-models", "PUT", { textModel: "a/b" }));
+    expect(res.status).toBe(200);
+    const [args] = db.aiModelSettings.upsert.mock.calls[0] as [{ create: Record<string, unknown> }];
+    expect(args.create).toMatchObject({ textModel: "a/b", textModelName: null });
+  });
+
+  it("PUT revalida as telas que mostram o modelo", async () => {
+    fetchOpenRouterCatalog.mockResolvedValue([]);
+    await settingsRoute.PUT(jsonRequest("https://app.test/api/settings/ai-models", "PUT", { textModel: "a/b" }));
+    expect(revalidatePath).toHaveBeenCalledWith("/", "layout");
+  });
+});
+
+describe("GET /api/settings/ai-models/active", () => {
+  it("sem configuração: rótulos do padrão (env → código)", async () => {
+    const body = await (await activeRoute.GET()).json();
+    expect(body.texto.OPENROUTER.modelId).toBe(process.env.OPENROUTER_DEFAULT_MODEL?.trim() || "deepseek/deepseek-v4-flash-0731");
+    expect(body.texto.OPENROUTER.label).toMatch(/^OpenRouter \(.+\)$/);
+    expect(body.imagem.STABILITY.label).toMatch(/^Stability AI \(/);
+  });
+
+  it("o rótulo muda quando a configuração do painel muda", async () => {
+    const antes = (await (await activeRoute.GET()).json()).texto.OPENROUTER.label;
+    db.aiModelSettings.findUnique.mockResolvedValue({
+      textProvider: "OPENROUTER",
+      textModel: "anthropic/claude-sonnet-5.5",
+      textModelName: "Anthropic: Claude Sonnet 5.5",
+      imageProvider: null,
+      imageModel: null,
+      imageModelName: null,
+    });
+    const depois = (await (await activeRoute.GET()).json()).texto.OPENROUTER;
+    expect(depois.label).not.toBe(antes);
+    expect(depois).toMatchObject({ modelId: "anthropic/claude-sonnet-5.5", label: "OpenRouter (Anthropic: Claude Sonnet 5.5)", origem: "painel" });
   });
 });
 

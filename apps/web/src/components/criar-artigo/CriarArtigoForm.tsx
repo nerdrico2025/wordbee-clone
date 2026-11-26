@@ -11,6 +11,9 @@ import { ProgressSteps, type StepState } from "@/components/criar-artigo/Progres
 import { useToast } from "@/components/ui/Toast";
 import { ARTICLE_TYPE_OPTIONS, type ArticleTypeValue } from "@/lib/article-type-options";
 import type { CategoryOption, ProviderOption, ProviderValue, SiteOption } from "@/lib/criar-artigo-types";
+import { ActiveModelHint } from "@/components/ai-models/ActiveModelHint";
+import { useActiveModels } from "@/components/ai-models/useActiveModels";
+import { withActiveModels } from "@/components/ai-models/active-models-logic";
 
 interface Props {
   sites: SiteOption[];
@@ -20,8 +23,12 @@ interface Props {
 
 type PipelineEvent = { step: string; status: "start" | "done" | "error"; [key: string]: unknown };
 
-export function CriarArtigoForm({ sites, textProviders, imageProviders }: Props) {
+export function CriarArtigoForm({ sites, textProviders: textProvidersIniciais, imageProviders: imageProvidersIniciais }: Props) {
   const { toast } = useToast();
+  // Modelo ativo revalidado sem F5 (troca em Modelos de IA reflete aqui).
+  const ativos = useActiveModels();
+  const textProviders = ativos ? withActiveModels(textProvidersIniciais, ativos.texto) : textProvidersIniciais;
+  const imageProviders = ativos ? withActiveModels(imageProvidersIniciais, ativos.imagem) : imageProvidersIniciais;
   const [wpSiteId, setWpSiteId] = useState(sites[0]?.id ?? "");
   const [categorias, setCategorias] = useState<CategoryOption[] | null>(null);
   const [categoriasLoading, setCategoriasLoading] = useState(false);
@@ -175,21 +182,28 @@ export function CriarArtigoForm({ sites, textProviders, imageProviders }: Props)
                 ))}
               </Select>
 
-              <Select label="IA para Texto" value={iaTexto} onChange={(e) => setIaTexto(e.target.value as ProviderValue)} required>
-                {textProviders.map((p) => (
-                  <option key={p.provider} value={p.provider}>
-                    {p.nome} ({p.modeloLabel})
-                  </option>
-                ))}
-              </Select>
+              <div className="flex flex-col gap-1.5">
+                <Select label="IA para Texto" value={iaTexto} onChange={(e) => setIaTexto(e.target.value as ProviderValue)} required>
+                  {textProviders.map((p) => (
+                    <option key={p.provider} value={p.provider}>
+                      {p.modelo.label}
+                    </option>
+                  ))}
+                </Select>
+                <ActiveModelHint modelo={textProviders.find((p) => p.provider === iaTexto)?.modelo} nota={false} />
+              </div>
 
-              <Select label="IA para Imagem" value={iaImagem} onChange={(e) => setIaImagem(e.target.value as ProviderValue)} required>
-                {imageProviders.map((p) => (
-                  <option key={p.provider} value={p.provider}>
-                    {p.nome} ({p.modeloLabel})
-                  </option>
-                ))}
-              </Select>
+              <div className="flex flex-col gap-1.5">
+                <Select label="IA para Imagem" value={iaImagem} onChange={(e) => setIaImagem(e.target.value as ProviderValue)} required>
+                  {imageProviders.map((p) => (
+                    <option key={p.provider} value={p.provider}>
+                      {p.modelo.label}
+                    </option>
+                  ))}
+                </Select>
+                <ActiveModelHint modelo={imageProviders.find((p) => p.provider === iaImagem)?.modelo} nota={false} />
+              </div>
+              <p className="text-xs text-zinc-400 sm:col-span-2">O modelo vale para todas as gerações e é lido a cada execução.</p>
 
               <Select
                 label="Tipo de artigo"
