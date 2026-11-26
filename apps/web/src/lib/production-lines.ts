@@ -1,8 +1,9 @@
 import "server-only";
 import { prisma } from "@wordbee/db";
 import type { AiProviderName, ArticleTypeSlug } from "@wordbee/shared";
-import { createTextProvider, getStorageDriver, AiProviderError } from "@wordbee/shared";
+import { createTextProvider, resolveModelId, getStorageDriver, AiProviderError } from "@wordbee/shared";
 import { getDecryptedApiKey } from "@/lib/api-keys";
+import { getAiModelSettings } from "@/lib/ai-model-settings";
 
 const MAX_REFERENCE_IMAGES = 5;
 
@@ -144,7 +145,8 @@ export async function generateTitlesForLine(userId: string, lineId: string, quan
     prisma.article.findMany({ where: { lineId }, select: { titulo: true } }),
   ]);
 
-  const provider = createTextProvider(line.iaTexto as AiProviderName, apiKey);
+  const modelId = resolveModelId("text", line.iaTexto as AiProviderName, await getAiModelSettings(userId));
+  const provider = createTextProvider(line.iaTexto as AiProviderName, apiKey, modelId);
   const titulosExistentes = [...publishedTitles.map((a) => a.titulo)];
   const allQueueTitles = await prisma.titleQueueItem.findMany({ where: { lineId, status: "NA_FILA" }, select: { titulo: true } });
   titulosExistentes.push(...allQueueTitles.map((t) => t.titulo));

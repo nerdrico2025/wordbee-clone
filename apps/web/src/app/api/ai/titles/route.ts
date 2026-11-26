@@ -2,7 +2,8 @@ import { NextResponse, type NextRequest } from "next/server";
 import { getCurrentSession } from "@/lib/auth";
 import { generateTitlesSchema } from "@/lib/validators";
 import { getDecryptedApiKey } from "@/lib/api-keys";
-import { createTextProvider, AiProviderError } from "@wordbee/shared";
+import { createTextProvider, resolveModelId, AiProviderError } from "@wordbee/shared";
+import { getAiModelSettings } from "@/lib/ai-model-settings";
 
 export async function POST(req: NextRequest) {
   const session = await getCurrentSession();
@@ -22,7 +23,8 @@ export async function POST(req: NextRequest) {
   }
 
   try {
-    const provider = createTextProvider(iaTexto, apiKey);
+    const modelId = resolveModelId("text", iaTexto, await getAiModelSettings(session.user.id));
+    const provider = createTextProvider(iaTexto, apiKey, modelId);
     const titulos = await provider.generateTitles({ tipo, tema, quantidade: 5, titulosExistentes });
     return NextResponse.json({ titulos });
   } catch (err) {

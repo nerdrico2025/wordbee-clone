@@ -161,6 +161,7 @@ model User {
   gruposParceiros      GrupoParceiro[]
   filaDistribuicao     FilaDistribuicaoManual[]
   distributionLinks    DistributionLink[]
+  aiModelSettings      AiModelSettings?
 
   @@map("users")
 }
@@ -316,6 +317,9 @@ model Article {
   promptCustomizado String? @map("prompt_customizado")
   iaTexto      AiProvider?   @map("ia_texto")
   iaImagem     AiProvider?   @map("ia_imagem")
+  /// Model id efetivamente usado (ex.: "deepseek/deepseek-v4-flash-0731"). Nulo em artigos anteriores a 2026-11-25.
+  modeloTexto  String?       @map("modelo_texto")
+  modeloImagem String?       @map("modelo_imagem")
   categoriaWpId Int?         @map("categoria_wp_id")
   wpStatusAlvo WpPostStatus  @default(PUBLISH) @map("wp_status_alvo")
   status       ArticleStatus @default(PROCESSANDO)
@@ -342,6 +346,28 @@ model Article {
   @@index([lineId, createdAt])
   @@index([userId, status])
   @@map("articles")
+}
+
+// ---------------------------------------------------------------------------
+// Modelos de IA configuráveis pelo painel (Chaves de API → Modelos de IA).
+// Nulo = usar o padrão atual (env → código). O modelo só vale para o
+// provedor gravado ao lado dele (hoje sempre OPENROUTER) — ver
+// `resolveModelId` em packages/shared/src/ai/models.ts e DECISIONS.md
+// (2026-11-25).
+// ---------------------------------------------------------------------------
+
+model AiModelSettings {
+  id            String      @id @default(cuid())
+  userId        String      @unique @map("user_id")
+  textProvider  AiProvider? @map("text_provider")
+  textModel     String?     @map("text_model")
+  imageProvider AiProvider? @map("image_provider")
+  imageModel    String?     @map("image_model")
+  updatedAt     DateTime    @updatedAt @map("updated_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("ai_model_settings")
 }
 
 // ---------------------------------------------------------------------------

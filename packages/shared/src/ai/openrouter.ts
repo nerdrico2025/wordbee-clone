@@ -1,4 +1,4 @@
-import { AI_MODELS } from "./models.js";
+import { resolveModelId } from "./models.js";
 import { fetchJsonOrThrow, fetchStreamedTextOrThrow, fetchWithTimeout, parseJsonArrayResponse, parseJsonObjectResponse } from "./http.js";
 import { AiProviderError, classifyHttpError } from "./errors.js";
 import { buildArticleSystemPrompt, buildTitleSuggestionPrompt } from "../prompts/common.js";
@@ -42,7 +42,7 @@ type OpenRouterCallModo = "stream" | "sync";
  * idle timeout (mesmo dia) — permite comparar taxa de timeout antes/depois
  * olhando o mesmo log. Ver DECISIONS.md.
  */
-function logOpenRouterCall(tipo: OpenRouterCallTipo, modo: OpenRouterCallModo, startedAt: number, err?: unknown): void {
+function logOpenRouterCall(tipo: OpenRouterCallTipo, modo: OpenRouterCallModo, startedAt: number, modelo: string, err?: unknown): void {
   const duracaoMs = Date.now() - startedAt;
   const resultado = !err ? "ok" : err instanceof AiProviderError && err.code === "timeout" ? "timeout" : "erro";
   console.log(
@@ -50,6 +50,7 @@ function logOpenRouterCall(tipo: OpenRouterCallTipo, modo: OpenRouterCallModo, s
       evento: "openrouter_call",
       tipo,
       modo,
+      modelo,
       duracaoMs,
       resultado,
       ...(err ? { detalhe: err instanceof Error ? err.message : String(err) } : {}),
@@ -70,6 +71,7 @@ function logOpenRouterCall(tipo: OpenRouterCallTipo, modo: OpenRouterCallModo, s
  */
 async function chatCompletion(
   apiKey: string,
+  model: string,
   systemPrompt: string,
   userPrompt: string,
   tipo: "titulo" | "artigo" | "copy_distribuicao"
@@ -80,7 +82,7 @@ async function chatCompletion(
       method: "POST",
       headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json", ...EXTRA_HEADERS },
       body: JSON.stringify({
-        model: AI_MODELS.openrouter.text,
+        model,
         messages: [
           { role: "system", content: systemPrompt },
           { role: "user", content: userPrompt },
@@ -92,20 +94,20 @@ async function chatCompletion(
 
     if (!content) throw new AiProviderError("unknown", PROVIDER, "resposta vazia do modelo");
 
-    logOpenRouterCall(tipo, "stream", startedAt);
+    logOpenRouterCall(tipo, "stream", startedAt, model);
     return content;
   } catch (err) {
-    logOpenRouterCall(tipo, "stream", startedAt, err);
+    logOpenRouterCall(tipo, "stream", startedAt, model, err);
     throw err;
   }
 }
 
-export function createOpenRouterTextProvider(apiKey: string): TextProvider {
+export function createOpenRouterTextProvider(apiKey: string, model: string = resolveModelId("text", "OPENROUTER")): TextProvider {
   return {
     async generateTitles({ tipo, tema, quantidade = 5, titulosExistentes }: GenerateTitlesInput) {
       const config = ARTICLE_TYPE_PROMPTS[tipo];
       const prompt = buildTitleSuggestionPrompt({ tipoLabel: config.label, tema, quantidade, titulosExistentes });
-      const content = await chatCompletion(apiKey, "Você é um especialista em títulos otimizados para SEO.", prompt, "titulo");
+      const content = await chatCompletion(apiKey, model, "Você é um especialista em títulos otimizados para SEO.", prompt, "titulo");
       return parseJsonArrayResponse(content, PROVIDER);
     },
 
@@ -118,7 +120,7 @@ export function createOpenRouterTextProvider(apiKey: string): TextProvider {
 - "metaTitle": título otimizado para SEO, até 60 caracteres
 
 Não use markdown nem texto fora do JSON.`;
-      const content = await chatCompletion(apiKey, systemPrompt, userPrompt, "artigo");
+      const content = await chatCompletion(apiKey, model, systemPrompt, userPrompt, "artigo");
       const parsed = parseJsonObjectResponse<{ contentHtml: string; excerpt: string; metaTitle: string }>(content, PROVIDER);
       return {
         contentHtml: parsed.contentHtml,
@@ -131,6 +133,7 @@ Não use markdown nem texto fora do JSON.`;
     async generateDistributionCopy(input: GenerateDistributionCopyInput): Promise<GeneratedDistributionCopy[]> {
       const content = await chatCompletion(
         apiKey,
+        model,
         buildDistributionCopySystemPrompt(input),
         buildDistributionCopyUserPrompt(input),
         "copy_distribuicao"
@@ -178,10 +181,10 @@ async function requestImage(apiKey: string, body: Record<string, unknown>): Prom
     const item = json.data?.[0];
     if (!item?.b64_json) throw new AiProviderError("unknown", PROVIDER, "resposta de imagem vazia");
 
-    logOpenRouterCall("imagem", "sync", startedAt);
+    logOpenRouterCall("imagem", "sync", startedAt, String(body.model));
     return { base64: item.b64_json, mimeType: item.media_type ?? "image/png" };
   } catch (err) {
-    logOpenRouterCall("imagem", "sync", startedAt, err);
+    logOpenRouterCall("imagem", "sync", startedAt, String(body.model), err);
     throw err;
   }
 }
@@ -189,14 +192,14 @@ async function requestImage(apiKey: string, body: Record<string, unknown>): Prom
 /**
  * OpenRouter tem uma Image API dedicada (`POST /images`, formato diferente
  * de `/chat/completions`), que reaproveita a mesma chave/autenticação do
- * provider de texto. Modelo padrão configurável via
- * `OPENROUTER_IMAGE_DEFAULT_MODEL` — "Nano Banana" (Gemini 2.5 Flash Image),
+ * provider de texto. Modelo resolvido por `resolveModelId` (painel → env
+ * `OPENROUTER_IMAGE_DEFAULT_MODEL` → padrão do código) — "Nano Banana" (Gemini 2.5 Flash Image),
  * o mesmo modelo comercial usado no provider Gemini direto.
  */
-export function createOpenRouterImageProvider(apiKey: string): ImageProvider {
+export function createOpenRouterImageProvider(apiKey: string, model: string = resolveModelId("image", "OPENROUTER")): ImageProvider {
   return {
     async generateImage({ prompt, referenceImages }: GenerateImageInput): Promise<GeneratedImage> {
-      const baseBody = { model: AI_MODELS.openrouter.image, prompt, n: 1 };
+      const baseBody = { model, prompt, n: 1 };
 
       if (!referenceImages || referenceImages.length === 0) {
         return requestImage(apiKey, baseBody);
@@ -215,7 +218,7 @@ export function createOpenRouterImageProvider(apiKey: string): ImageProvider {
         // (não é um erro do usuário) — gera sem elas em vez de falhar o
         // artigo inteiro, e avisa nos logs para investigação.
         // eslint-disable-next-line no-console
-        console.warn(`[ai:${PROVIDER}] modelo "${AI_MODELS.openrouter.image}" não suporta input_references; gerando sem imagens de referência.`);
+        console.warn(`[ai:${PROVIDER}] modelo "${model}" não suporta input_references; gerando sem imagens de referência.`);
         return requestImage(apiKey, baseBody);
       }
     },

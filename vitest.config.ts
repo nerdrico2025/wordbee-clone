@@ -10,6 +10,9 @@ export default defineConfig({
   resolve: {
     alias: { "@": path.resolve(__dirname, "apps/web/src") },
   },
+  // Runtime JSX automático (igual ao Next.js) — sem isto, renderizar um
+  // componente .tsx num teste falha com "React is not defined".
+  esbuild: { jsx: "automatic" },
   test: {
     environment: "node",
     include: [

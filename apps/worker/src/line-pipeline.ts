@@ -5,6 +5,7 @@ import type { AiProviderName, ArticleTypeSlug } from "@wordbee/shared";
 import {
   createTextProvider,
   createImageProvider,
+  resolveModelId,
   uploadMedia,
   createPost,
   getStorageDriver,
@@ -13,6 +14,7 @@ import {
   IMAGE_PROVIDERS,
 } from "@wordbee/shared";
 import { getDecryptedApiKey } from "./api-keys.js";
+import { getAiModelSettings } from "./ai-model-settings.js";
 import { getSiteCredentials } from "./wp-sites.js";
 import { withProviderSlot } from "./provider-concurrency.js";
 import { jitteredMs } from "./jitter.js";
@@ -152,8 +154,13 @@ async function runProductionLineInner(redis: Redis, lineId: string, log: LogFn):
     return;
   }
 
-  const textProvider = createTextProvider(line.iaTexto as AiProviderName, textKey);
-  const imageProvider = createImageProvider(line.iaImagem as AiProviderName, imageKey);
+  // Lido a cada execução (cache ≤60s em ai-model-settings.ts): trocar o
+  // modelo no painel vale a partir do próximo tick, sem restart do worker.
+  const modelSettings = await getAiModelSettings(line.userId);
+  const modeloTexto = resolveModelId("text", line.iaTexto as AiProviderName, modelSettings);
+  const modeloImagem = resolveModelId("image", line.iaImagem as AiProviderName, modelSettings);
+  const textProvider = createTextProvider(line.iaTexto as AiProviderName, textKey, modeloTexto);
+  const imageProvider = createImageProvider(line.iaImagem as AiProviderName, imageKey, modeloImagem);
 
   // 1. Resolve o título: o próximo da fila, ou gera um novo evitando duplicados.
   const titleItem = await prisma.titleQueueItem.findFirst({
@@ -213,6 +220,8 @@ async function runProductionLineInner(redis: Redis, lineId: string, log: LogFn):
         status: "PROCESSANDO",
         iaTexto: line.iaTexto,
         iaImagem: line.iaImagem,
+        modeloTexto,
+        modeloImagem,
         categoriaWpId: line.categoriaWpId ?? undefined,
         wpStatusAlvo: line.statusWp,
         promptCustomizado: line.promptCustomizado,
@@ -253,7 +262,7 @@ async function runProductionLineInner(redis: Redis, lineId: string, log: LogFn):
         excerpt = gerado.excerpt;
         slug = gerado.slug;
         if (gerado.metaTitle && gerado.metaTitle.length > 0 && gerado.metaTitle.length <= 60) finalTitulo = gerado.metaTitle;
-        await prisma.article.update({ where: { id: article.id }, data: { titulo: finalTitulo, contentHtml, excerpt, slug } });
+        await prisma.article.update({ where: { id: article.id }, data: { titulo: finalTitulo, contentHtml, excerpt, slug, modeloTexto } });
       }
 
       let wpMediaId = fresh.wpMediaId;
@@ -269,7 +278,7 @@ async function runProductionLineInner(redis: Redis, lineId: string, log: LogFn):
           data: Buffer.from(imagem.base64, "base64"),
         });
         wpMediaId = media.id;
-        await prisma.article.update({ where: { id: article.id }, data: { imageUrl: media.sourceUrl, wpMediaId } });
+        await prisma.article.update({ where: { id: article.id }, data: { imageUrl: media.sourceUrl, wpMediaId, modeloImagem } });
       }
 
       const creds = await getSiteCredentials(line.wpSiteId);

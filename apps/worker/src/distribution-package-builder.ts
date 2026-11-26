@@ -4,6 +4,7 @@ import type { AiProviderName, ArticleTypeSlug, GeneratedDistributionCopy } from 
 import {
   createTextProvider,
   createImageProvider,
+  resolveModelId,
   uploadMedia,
   AiProviderError,
   WordPressError,
@@ -13,6 +14,7 @@ import {
   MAX_IMAGENS_PACOTE,
 } from "@wordbee/shared";
 import { getDecryptedApiKey } from "./api-keys.js";
+import { getAiModelSettings } from "./ai-model-settings.js";
 import { getSiteCredentials } from "./wp-sites.js";
 import { findEligiblePages } from "./facebook-pages.js";
 import { withProviderSlot } from "./provider-concurrency.js";
@@ -241,7 +243,7 @@ async function buildDistributionPackageInner(redis: Redis, packageId: string, lo
     return;
   }
 
-  const textProvider = createTextProvider(iaTexto, apiKey);
+  const textProvider = createTextProvider(iaTexto, apiKey, resolveModelId("text", iaTexto, await getAiModelSettings(pacote.userId)));
   const tipoLabel = ARTICLE_TYPE_PROMPTS[artigo.tipo as ArticleTypeSlug].label;
 
   let variacoes: GeneratedDistributionCopy[];
@@ -388,7 +390,7 @@ async function resolveImagens(
     return imagens;
   }
 
-  const imageProvider = createImageProvider(iaImagem, apiKey);
+  const imageProvider = createImageProvider(iaImagem, apiKey, resolveModelId("image", iaImagem, await getAiModelSettings(pacote.userId)));
   const creds = await getSiteCredentials(artigo.wpSiteId);
   const tema = artigo.tema ?? artigo.titulo;
 

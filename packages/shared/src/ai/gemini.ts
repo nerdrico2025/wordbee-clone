@@ -1,4 +1,4 @@
-import { AI_MODELS } from "./models.js";
+import { resolveModelId } from "./models.js";
 import { fetchJsonOrThrow, fetchWithTimeout, parseJsonArrayResponse, parseJsonObjectResponse } from "./http.js";
 import { AiProviderError, classifyHttpError } from "./errors.js";
 import { buildArticleSystemPrompt, buildTitleSuggestionPrompt } from "../prompts/common.js";
@@ -61,12 +61,12 @@ function textFromResponse(json: GeminiResponse): string {
   return text;
 }
 
-export function createGeminiTextProvider(apiKey: string): TextProvider {
+export function createGeminiTextProvider(apiKey: string, model: string = resolveModelId("text", "GEMINI")): TextProvider {
   return {
     async generateTitles({ tipo, tema, quantidade = 5, titulosExistentes }: GenerateTitlesInput) {
       const config = ARTICLE_TYPE_PROMPTS[tipo];
       const prompt = buildTitleSuggestionPrompt({ tipoLabel: config.label, tema, quantidade, titulosExistentes });
-      const json = await generateContent(apiKey, AI_MODELS.gemini.text, undefined, [{ text: prompt }]);
+      const json = await generateContent(apiKey, model, undefined, [{ text: prompt }]);
       return parseJsonArrayResponse(textFromResponse(json), PROVIDER);
     },
 
@@ -79,7 +79,7 @@ export function createGeminiTextProvider(apiKey: string): TextProvider {
 - "metaTitle": título otimizado para SEO, até 60 caracteres
 
 Não use markdown nem texto fora do JSON.`;
-      const json = await generateContent(apiKey, AI_MODELS.gemini.text, systemPrompt, [{ text: userPrompt }]);
+      const json = await generateContent(apiKey, model, systemPrompt, [{ text: userPrompt }]);
       const parsed = parseJsonObjectResponse<{ contentHtml: string; excerpt: string; metaTitle: string }>(textFromResponse(json), PROVIDER);
       return {
         contentHtml: parsed.contentHtml,
@@ -90,7 +90,7 @@ Não use markdown nem texto fora do JSON.`;
     },
 
     async generateDistributionCopy(input: GenerateDistributionCopyInput): Promise<GeneratedDistributionCopy[]> {
-      const json = await generateContent(apiKey, AI_MODELS.gemini.text, buildDistributionCopySystemPrompt(input), [
+      const json = await generateContent(apiKey, model, buildDistributionCopySystemPrompt(input), [
         { text: buildDistributionCopyUserPrompt(input) },
       ]);
       return parseDistributionCopyResponse(textFromResponse(json), PROVIDER);
@@ -98,7 +98,7 @@ Não use markdown nem texto fora do JSON.`;
   };
 }
 
-export function createGeminiImageProvider(apiKey: string): ImageProvider {
+export function createGeminiImageProvider(apiKey: string, model: string = resolveModelId("image", "GEMINI")): ImageProvider {
   return {
     async generateImage({ prompt, referenceImages }: GenerateImageInput): Promise<GeneratedImage> {
       const parts: GeminiPart[] = [{ text: prompt }];
@@ -106,7 +106,7 @@ export function createGeminiImageProvider(apiKey: string): ImageProvider {
         parts.push({ inlineData: { mimeType: ref.mimeType, data: ref.base64 } });
       }
 
-      const json = await generateContent(apiKey, AI_MODELS.gemini.image, undefined, parts, ["TEXT", "IMAGE"]);
+      const json = await generateContent(apiKey, model, undefined, parts, ["TEXT", "IMAGE"]);
       if (json.promptFeedback?.blockReason) {
         throw new AiProviderError("content_blocked", PROVIDER, json.promptFeedback.blockReason);
       }

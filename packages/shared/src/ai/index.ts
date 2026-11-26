@@ -5,33 +5,38 @@ import { createStabilityImageProvider, validateStabilityKey } from "./stability.
 import { createOpenRouterTextProvider, createOpenRouterImageProvider, validateOpenRouterKey } from "./openrouter.js";
 import type { AiProviderName, ImageProvider, TextProvider } from "./types.js";
 
-export function createTextProvider(provider: AiProviderName, apiKey: string): TextProvider {
+/**
+ * `modelId` é o modelo já resolvido por `resolveModelId` (painel → env →
+ * padrão). Omitido, cada provedor resolve env → padrão sozinho — mesmo
+ * comportamento de antes do modelo configurável pelo painel.
+ */
+export function createTextProvider(provider: AiProviderName, apiKey: string, modelId?: string): TextProvider {
   switch (provider) {
     case "OPENAI":
-      return createOpenAiTextProvider(apiKey);
+      return createOpenAiTextProvider(apiKey, modelId);
     case "GEMINI":
-      return createGeminiTextProvider(apiKey);
+      return createGeminiTextProvider(apiKey, modelId);
     case "GROK":
-      return createGrokTextProvider(apiKey);
+      return createGrokTextProvider(apiKey, modelId);
     case "OPENROUTER":
-      return createOpenRouterTextProvider(apiKey);
+      return createOpenRouterTextProvider(apiKey, modelId);
     case "STABILITY":
       throw new Error("Stability AI não oferece geração de texto.");
   }
 }
 
-export function createImageProvider(provider: AiProviderName, apiKey: string): ImageProvider {
+export function createImageProvider(provider: AiProviderName, apiKey: string, modelId?: string): ImageProvider {
   switch (provider) {
     case "OPENAI":
-      return createOpenAiImageProvider(apiKey);
+      return createOpenAiImageProvider(apiKey, modelId);
     case "GEMINI":
-      return createGeminiImageProvider(apiKey);
+      return createGeminiImageProvider(apiKey, modelId);
     case "GROK":
-      return createGrokImageProvider(apiKey);
+      return createGrokImageProvider(apiKey, modelId);
     case "STABILITY":
-      return createStabilityImageProvider(apiKey);
+      return createStabilityImageProvider(apiKey, modelId);
     case "OPENROUTER":
-      return createOpenRouterImageProvider(apiKey);
+      return createOpenRouterImageProvider(apiKey, modelId);
   }
 }
 
@@ -54,3 +59,4 @@ export * from "./types.js";
 export * from "./errors.js";
 export * from "./models.js";
 export * from "./registry.js";
+export * from "./openrouter-catalog.js";

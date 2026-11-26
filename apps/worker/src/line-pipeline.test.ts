@@ -32,11 +32,14 @@ const db = {
   titleQueueItem: { findFirst: vi.fn(), update: vi.fn(), create: vi.fn(), count: vi.fn(), findMany: vi.fn() },
   article: { findUnique: vi.fn(), create: vi.fn(), findUniqueOrThrow: vi.fn(), update: vi.fn(), findMany: vi.fn() },
   lineReferenceImage: { findMany: vi.fn() },
+  aiModelSettings: { findUnique: vi.fn() },
 };
 
 vi.mock("@wordbee/db", () => ({ prisma: db }));
 
 const { runProductionLine } = await import("./line-pipeline.js");
+const { clearAiModelSettingsCache } = await import("./ai-model-settings.js");
+const shared = await import("@wordbee/shared");
 const { AiProviderError } = await import("@wordbee/shared");
 
 const BASE_LINE = {
@@ -70,6 +73,8 @@ function noopLog() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  clearAiModelSettingsCache();
+  db.aiModelSettings.findUnique.mockResolvedValue(null);
   db.titleQueueItem.count.mockResolvedValue(0);
   db.titleQueueItem.findMany.mockResolvedValue([]);
   db.article.findMany.mockResolvedValue([]);
@@ -281,5 +286,86 @@ describe("runProductionLine — rede de segurança contra exceção inesperada",
     getDecryptedApiKey.mockRejectedValueOnce(new Error("timeout de rede"));
 
     await expect(runProductionLine(fakeRedis as never, "line-1", noopLog)).resolves.toBeUndefined();
+  });
+});
+
+describe("runProductionLine — modelo de IA configurável pelo painel", () => {
+  function setUpSuccessfulRun() {
+    db.titleQueueItem.findFirst.mockResolvedValue(null);
+    db.article.findUnique.mockResolvedValue(null);
+    db.article.create.mockResolvedValue({ id: "article-1" });
+    db.article.findUniqueOrThrow.mockResolvedValue({
+      id: "article-1",
+      contentHtml: null,
+      excerpt: null,
+      slug: null,
+      titulo: "Título gerado pela IA",
+      wpMediaId: null,
+    });
+    generateArticle.mockResolvedValue({ contentHtml: "<p>x</p>", excerpt: "e", slug: "s", metaTitle: "Meta" });
+    generateImage.mockResolvedValue({ base64: "AAAA", mimeType: "image/png" });
+    uploadMedia.mockResolvedValue({ id: 42, sourceUrl: "https://blog.test/img.png" });
+    createPost.mockResolvedValue({ id: 99, link: "https://blog.test/post" });
+  }
+
+  it("configuração alterada no banco entre dois ticks: o segundo tick usa o modelo novo, sem restart", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(new Date("2026-11-25T12:00:00Z"));
+      db.productionLine.findUnique.mockResolvedValue({ ...BASE_LINE, iaTexto: "OPENROUTER", iaImagem: "OPENROUTER" });
+      setUpSuccessfulRun();
+      db.aiModelSettings.findUnique.mockResolvedValue({
+        textProvider: "OPENROUTER",
+        textModel: "modelo/antigo",
+        imageProvider: "OPENROUTER",
+        imageModel: "imagem/antiga",
+      });
+
+      await runProductionLine(fakeRedis as never, "line-1", noopLog);
+
+      // Usuário troca o modelo no painel; próximo tick do scheduler (90s depois).
+      db.aiModelSettings.findUnique.mockResolvedValue({
+        textProvider: "OPENROUTER",
+        textModel: "modelo/novo",
+        imageProvider: "OPENROUTER",
+        imageModel: "imagem/nova",
+      });
+      vi.setSystemTime(new Date("2026-11-25T12:01:30Z"));
+
+      await runProductionLine(fakeRedis as never, "line-1", noopLog);
+
+      const textCalls = vi.mocked(shared.createTextProvider).mock.calls;
+      const imageCalls = vi.mocked(shared.createImageProvider).mock.calls;
+      expect(textCalls[0]).toEqual(["OPENROUTER", "fake-key", "modelo/antigo"]);
+      expect(textCalls[1]).toEqual(["OPENROUTER", "fake-key", "modelo/novo"]);
+      expect(imageCalls[0]).toEqual(["OPENROUTER", "fake-key", "imagem/antiga"]);
+      expect(imageCalls[1]).toEqual(["OPENROUTER", "fake-key", "imagem/nova"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("grava no artigo o model id usado (modeloTexto/modeloImagem)", async () => {
+    db.productionLine.findUnique.mockResolvedValue({ ...BASE_LINE, iaTexto: "OPENROUTER", iaImagem: "OPENROUTER" });
+    setUpSuccessfulRun();
+    db.aiModelSettings.findUnique.mockResolvedValue({ textProvider: "OPENROUTER", textModel: "t/x", imageProvider: "OPENROUTER", imageModel: "i/y" });
+
+    await runProductionLine(fakeRedis as never, "line-1", noopLog);
+
+    const [createArgs] = db.article.create.mock.calls[0] as [{ data: { modeloTexto: string; modeloImagem: string } }];
+    expect(createArgs.data.modeloTexto).toBe("t/x");
+    expect(createArgs.data.modeloImagem).toBe("i/y");
+  });
+
+  it("modelo salvo para o OpenRouter não vaza para uma linha que usa Gemini", async () => {
+    db.productionLine.findUnique.mockResolvedValue({ ...BASE_LINE, iaTexto: "GEMINI", iaImagem: "GEMINI" });
+    setUpSuccessfulRun();
+    db.aiModelSettings.findUnique.mockResolvedValue({ textProvider: "OPENROUTER", textModel: "t/x", imageProvider: "OPENROUTER", imageModel: "i/y" });
+
+    await runProductionLine(fakeRedis as never, "line-1", noopLog);
+
+    const [, , modelId] = vi.mocked(shared.createTextProvider).mock.calls[0]!;
+    expect(modelId).not.toBe("t/x");
+    expect(modelId).toBe(shared.resolveModelId("text", "GEMINI"));
   });
 });

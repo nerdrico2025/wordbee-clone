@@ -1,9 +1,10 @@
 import "server-only";
 import { prisma } from "@wordbee/db";
 import type { AiProviderName, ArticleTypeSlug } from "@wordbee/shared";
-import { createTextProvider, createImageProvider, AiProviderError, WordPressError, uploadMedia, createPost } from "@wordbee/shared";
+import { createTextProvider, createImageProvider, resolveModelId, AiProviderError, WordPressError, uploadMedia, createPost } from "@wordbee/shared";
 import { getDecryptedApiKey } from "@/lib/api-keys";
 import { getSiteCredentials } from "@/lib/wp-sites";
+import { getAiModelSettings } from "@/lib/ai-model-settings";
 
 export interface UnitPipelineParams {
   userId: string;
@@ -45,8 +46,12 @@ export async function* runUnitArticlePipeline(params: UnitPipelineParams): Async
     return;
   }
 
-  const textProvider = createTextProvider(params.iaTexto, textKey);
-  const imageProvider = createImageProvider(params.iaImagem, imageKey);
+  // Lido a cada geração: trocar o modelo no painel vale já na próxima.
+  const modelSettings = await getAiModelSettings(params.userId);
+  const modeloTexto = resolveModelId("text", params.iaTexto, modelSettings);
+  const modeloImagem = resolveModelId("image", params.iaImagem, modelSettings);
+  const textProvider = createTextProvider(params.iaTexto, textKey, modeloTexto);
+  const imageProvider = createImageProvider(params.iaImagem, imageKey, modeloImagem);
 
   // 1. Título
   yield { step: "titulo", status: "start" };
@@ -73,6 +78,8 @@ export async function* runUnitArticlePipeline(params: UnitPipelineParams): Async
       status: "PROCESSANDO",
       iaTexto: params.iaTexto,
       iaImagem: params.iaImagem,
+      modeloTexto,
+      modeloImagem,
       categoriaWpId: params.categoriaWpId,
       wpStatusAlvo: params.statusWp,
       tema: params.tema,
@@ -175,12 +182,14 @@ export async function resendArticle(userId: string, articleId: string): Promise<
     let excerpt = article.excerpt;
     let slug = article.slug;
     let titulo = article.titulo;
+    const modelSettings = await getAiModelSettings(userId);
 
     if (!contentHtml) {
       if (!article.iaTexto) throw new Error("Não é possível reenviar: provedor de texto original não registrado.");
       const textKey = await getDecryptedApiKey(userId, article.iaTexto, "TEXTO");
       if (!textKey) throw new AiProviderError("invalid_key", article.iaTexto.toLowerCase(), "chave não configurada");
-      const textProvider = createTextProvider(article.iaTexto, textKey);
+      const modeloTexto = resolveModelId("text", article.iaTexto, modelSettings);
+      const textProvider = createTextProvider(article.iaTexto, textKey, modeloTexto);
       const gerado = await textProvider.generateArticle({
         tipo: article.tipo,
         tema: article.tema ?? titulo,
@@ -191,7 +200,7 @@ export async function resendArticle(userId: string, articleId: string): Promise<
       excerpt = gerado.excerpt;
       slug = gerado.slug;
       if (gerado.metaTitle && gerado.metaTitle.length > 0 && gerado.metaTitle.length <= 60) titulo = gerado.metaTitle;
-      await prisma.article.update({ where: { id: article.id }, data: { titulo, contentHtml, excerpt, slug } });
+      await prisma.article.update({ where: { id: article.id }, data: { titulo, contentHtml, excerpt, slug, modeloTexto } });
     }
 
     let wpMediaId = article.wpMediaId;
@@ -199,13 +208,14 @@ export async function resendArticle(userId: string, articleId: string): Promise<
       if (!article.iaImagem) throw new Error("Não é possível reenviar: provedor de imagem original não registrado.");
       const imageKey = await getDecryptedApiKey(userId, article.iaImagem, "IMAGEM");
       if (!imageKey) throw new AiProviderError("invalid_key", article.iaImagem.toLowerCase(), "chave não configurada");
-      const imageProvider = createImageProvider(article.iaImagem, imageKey);
+      const modeloImagem = resolveModelId("image", article.iaImagem, modelSettings);
+      const imageProvider = createImageProvider(article.iaImagem, imageKey, modeloImagem);
       const imagem = await imageProvider.generateImage({ prompt: buildImagePrompt(titulo, article.tema ?? titulo) });
       const creds = await getSiteCredentials(userId, article.wpSiteId);
       const ext = imagem.mimeType === "image/jpeg" ? "jpg" : "png";
       const media = await uploadMedia(creds, { filename: `${slug || "imagem"}.${ext}`, mimeType: imagem.mimeType, data: Buffer.from(imagem.base64, "base64") });
       wpMediaId = media.id;
-      await prisma.article.update({ where: { id: article.id }, data: { imageUrl: media.sourceUrl, wpMediaId } });
+      await prisma.article.update({ where: { id: article.id }, data: { imageUrl: media.sourceUrl, wpMediaId, modeloImagem } });
     }
 
     const creds = await getSiteCredentials(userId, article.wpSiteId);

@@ -192,6 +192,7 @@ Schema completo em `packages/db/prisma/schema.prisma`. Comentário no topo do ar
 | `20260824130652_add_article_tema_and_prompt` | 2026-08-24 13:06 | `articles.tema`/`prompt_customizado` |
 | `20260825105312_add_openrouter_provider` | 2026-08-25 10:53 | Adiciona `OPENROUTER` ao enum `AiProvider` |
 | `20260830120000_add_production_line_lock_columns` | 2026-08-30 12:00 | `production_lines.locked_at`/`locked_by` |
+| `20261125120000_add_ai_model_settings` | 2026-11-25 12:00 | Tabela `ai_model_settings` + `articles.modelo_texto`/`modelo_imagem` (aditiva) — **aplicar em produção antes do deploy** |
 
 **Todas as 7 migrations estão confirmadas aplicadas em produção (Neon)** — mas só depois de um incidente real: a última (`20260830120000`) foi deployada em código antes de ser aplicada em produção, causando um `P2022` em produção por ~9h até ser corrigida manualmente (`prisma migrate deploy` rodado direto contra o Neon de produção). Ver seção 8 para o incidente completo. Não há migration no repositório sem correspondência aplicada **no momento em que este documento foi escrito** — mas o processo de deploy não garante isso automaticamente (seção 9), então essa afirmação vale para o instante da checagem, não como garantia permanente.
 
@@ -275,6 +276,18 @@ Chave Redis: **`provider-slot:<provider>`** (provider em minúsculo, ex. `provid
 **Observação de design que ficou como coincidência não-documentada, não resolvida nesta correção**: `SLOT_TTL_SECONDS` (300s) é literalmente igual a `DEFAULT_MAX_TIMEOUT_MS` (5min) do streaming de texto do OpenRouter (`packages/shared/src/ai/http.ts`) — o teto absoluto introduzido em 2026-08-27 para tolerar respostas legítimas lentas. Isso significa que uma chamada de texto no limite do que o sistema tolera como "normal" também é o cenário que mais tensiona o TTL do semáforo. A correção desta seção torna esse cenário seguro (nunca mais fica negativo/sem TTL), mas o valor `300` continua duplicado em dois arquivos por coincidência, não por uma decisão documentada de mantê-los sincronizados — vale uma decisão explícita (constante compartilhada, ou comentário cruzado nos dois arquivos) antes de mexer em qualquer um dos dois números isoladamente. Ver seção 11.
 
 Fonte: `apps/worker/src/provider-concurrency.ts`; `apps/worker/src/provider-concurrency.test.ts`; `apps/worker/src/provider-concurrency.integration.test.ts`; `DECISIONS.md` "Investigação de consumo de comandos Redis" item 5 (2026-08-29) e "Dois bugs reais encontrados na auditoria de PROJECT-STATE.md, corrigidos com TDD" (2026-08-31).
+
+### 7.3 Modelo de IA configurável pelo painel (2026-11-25)
+
+O model id de texto e de imagem do **OpenRouter** é escolhido na tela **Chaves de API → seção "Modelos de IA"**: combobox pesquisável alimentado pelo catálogo do OpenRouter, que também aceita ID digitado, e botões "Testar modelo", "Salvar" e "Voltar ao padrão". Fica salvo em `ai_model_settings` (uma linha por usuário, com o provedor a que cada modelo se aplica).
+
+- **Resolução**: `resolveModelId(kind, provider, settings)` em `packages/shared/src/ai/models.ts`, na ordem painel → env (`OPENROUTER_DEFAULT_MODEL` / `OPENROUTER_IMAGE_DEFAULT_MODEL`; demais provedores com suas envs de sempre) → padrão do código (`CODE_DEFAULT_MODELS`). O modelo do painel só vale para o provedor gravado com ele.
+- **Quem lê**: web (Criar Artigo, reenvio, sugestão de títulos, fila de títulos da linha) a cada geração, sem cache. Worker (linhas e copy/álbum de distribuição) a cada execução, com cache ≤60s (`apps/worker/src/ai-model-settings.ts`). **Nenhuma troca exige restart ou redeploy.**
+- **Rotas**: `GET/PUT /api/settings/ai-models`, `GET /api/settings/ai-models/catalog?tipo=texto|imagem` (cache 10 min; falha → lista vazia), `POST /api/settings/ai-models/test` (texto: chamada mínima; imagem: só confere que o ID existe, sem gerar).
+- **Rastro por artigo**: `articles.modelo_texto` / `modelo_imagem` (nullable; nulo nos artigos anteriores a 2026-11-25). Ainda não aparecem no Histórico.
+- **Logs**: o log estruturado `openrouter_call` agora inclui o campo `modelo`.
+
+Fonte: `DECISIONS.md` "Modelo de IA configurável pelo painel, com fallback para env" (2026-11-25).
 
 ---
 

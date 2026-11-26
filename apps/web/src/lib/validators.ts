@@ -223,3 +223,33 @@ export const updateFilaItemSchema = z.object({
   status: z.enum(["PENDENTE", "POSTADO", "PULADO"]),
   observacao: z.string().max(500).nullish(),
 });
+
+// --- Modelos de IA configuráveis pelo painel (Chaves de API → Modelos de IA)
+
+/** Tamanho máximo de um model id. Os do OpenRouter têm ~20-60 caracteres. */
+export const MAX_MODEL_ID_LENGTH = 120;
+
+/** ID de modelo (ex.: "deepseek/deepseek-v4-flash-0731"): não vazio, sem espaços, com tamanho máximo. */
+export const aiModelIdSchema = z
+  .string({ invalid_type_error: "Informe o ID do modelo." })
+  .trim()
+  .min(1, "Informe o ID do modelo.")
+  .max(MAX_MODEL_ID_LENGTH, `O ID do modelo pode ter no máximo ${MAX_MODEL_ID_LENGTH} caracteres.`)
+  .refine((v) => !/\s/.test(v), "O ID do modelo não pode ter espaços.");
+
+/** `null` (ou ausente) = voltar ao padrão (env → código). */
+export const saveAiModelsSchema = z
+  .object({
+    textModel: aiModelIdSchema.nullable().optional(),
+    imageModel: aiModelIdSchema.nullable().optional(),
+  })
+  .strict();
+
+export const testAiModelSchema = z.object({
+  tipo: z.enum(["texto", "imagem"]),
+  modelId: aiModelIdSchema,
+});
+
+export const aiModelCatalogQuerySchema = z.object({
+  tipo: z.enum(["texto", "imagem"]),
+});

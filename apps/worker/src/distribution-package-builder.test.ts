@@ -43,6 +43,7 @@ const db = {
   pageDistributionPost: { createMany: vi.fn() },
   divulgacaoPerfil: { count: vi.fn() },
   wpSite: { findUnique: vi.fn() },
+  aiModelSettings: { findUnique: vi.fn(async () => null) },
   $transaction: vi.fn(async (ops: unknown[]) => Promise.all(ops as Promise<unknown>[])),
 };
 

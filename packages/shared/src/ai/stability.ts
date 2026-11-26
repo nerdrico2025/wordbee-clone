@@ -1,4 +1,4 @@
-import { AI_MODELS } from "./models.js";
+import { resolveModelId } from "./models.js";
 import { fetchWithTimeout } from "./http.js";
 import { AiProviderError, classifyHttpError } from "./errors.js";
 import type { GenerateImageInput, GeneratedImage, ImageProvider } from "./types.js";
@@ -6,12 +6,12 @@ import type { GenerateImageInput, GeneratedImage, ImageProvider } from "./types.
 const PROVIDER = "stability";
 const BASE_URL = "https://api.stability.ai";
 
-export function createStabilityImageProvider(apiKey: string): ImageProvider {
+export function createStabilityImageProvider(apiKey: string, model: string = resolveModelId("image", "STABILITY")): ImageProvider {
   return {
     async generateImage({ prompt }: GenerateImageInput): Promise<GeneratedImage> {
       const form = new FormData();
       form.append("prompt", prompt);
-      form.append("model", AI_MODELS.stability.image);
+      form.append("model", model);
       form.append("output_format", "png");
 
       const res = await fetchWithTimeout(PROVIDER, `${BASE_URL}/v2beta/stable-image/generate/sd3`, {

@@ -1,4 +1,4 @@
-import { AI_MODELS } from "./models.js";
+import { resolveModelId } from "./models.js";
 import { fetchJsonOrThrow, fetchWithTimeout, parseJsonArrayResponse, parseJsonObjectResponse } from "./http.js";
 import { AiProviderError, classifyHttpError } from "./errors.js";
 import { buildArticleSystemPrompt, buildTitleSuggestionPrompt } from "../prompts/common.js";
@@ -21,12 +21,12 @@ import type {
 const PROVIDER = "openai";
 const BASE_URL = "https://api.openai.com/v1";
 
-async function chatCompletion(apiKey: string, systemPrompt: string, userPrompt: string): Promise<string> {
+async function chatCompletion(apiKey: string, model: string, systemPrompt: string, userPrompt: string): Promise<string> {
   const json = (await fetchJsonOrThrow(PROVIDER, `${BASE_URL}/chat/completions`, {
     method: "POST",
     headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
     body: JSON.stringify({
-      model: AI_MODELS.openai.text,
+      model,
       messages: [
         { role: "system", content: systemPrompt },
         { role: "user", content: userPrompt },
@@ -40,12 +40,12 @@ async function chatCompletion(apiKey: string, systemPrompt: string, userPrompt: 
   return content;
 }
 
-export function createOpenAiTextProvider(apiKey: string): TextProvider {
+export function createOpenAiTextProvider(apiKey: string, model: string = resolveModelId("text", "OPENAI")): TextProvider {
   return {
     async generateTitles({ tipo, tema, quantidade = 5, titulosExistentes }: GenerateTitlesInput) {
       const config = ARTICLE_TYPE_PROMPTS[tipo];
       const prompt = buildTitleSuggestionPrompt({ tipoLabel: config.label, tema, quantidade, titulosExistentes });
-      const content = await chatCompletion(apiKey, "Você é um especialista em títulos otimizados para SEO.", prompt);
+      const content = await chatCompletion(apiKey, model, "Você é um especialista em títulos otimizados para SEO.", prompt);
       return parseJsonArrayResponse(content, PROVIDER);
     },
 
@@ -58,7 +58,7 @@ export function createOpenAiTextProvider(apiKey: string): TextProvider {
 - "metaTitle": título otimizado para SEO, até 60 caracteres
 
 Não use markdown nem texto fora do JSON.`;
-      const content = await chatCompletion(apiKey, systemPrompt, userPrompt);
+      const content = await chatCompletion(apiKey, model, systemPrompt, userPrompt);
       const parsed = parseJsonObjectResponse<{ contentHtml: string; excerpt: string; metaTitle: string }>(content, PROVIDER);
       return {
         contentHtml: parsed.contentHtml,
@@ -69,20 +69,20 @@ Não use markdown nem texto fora do JSON.`;
     },
 
     async generateDistributionCopy(input: GenerateDistributionCopyInput): Promise<GeneratedDistributionCopy[]> {
-      const content = await chatCompletion(apiKey, buildDistributionCopySystemPrompt(input), buildDistributionCopyUserPrompt(input));
+      const content = await chatCompletion(apiKey, model, buildDistributionCopySystemPrompt(input), buildDistributionCopyUserPrompt(input));
       return parseDistributionCopyResponse(content, PROVIDER);
     },
   };
 }
 
-export function createOpenAiImageProvider(apiKey: string): ImageProvider {
+export function createOpenAiImageProvider(apiKey: string, model: string = resolveModelId("image", "OPENAI")): ImageProvider {
   return {
     async generateImage({ prompt }: GenerateImageInput): Promise<GeneratedImage> {
       const json = (await fetchJsonOrThrow(PROVIDER, `${BASE_URL}/images/generations`, {
         method: "POST",
         headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
         body: JSON.stringify({
-          model: AI_MODELS.openai.image,
+          model: model,
           prompt,
           n: 1,
           size: "1024x1024",
