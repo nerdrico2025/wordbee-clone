@@ -51,6 +51,16 @@ Fonte original: `distribuicao-wordbee-especificacao.md` §7 e `plano-acao-claude
 
 ---
 
+## Documentação alinhada ao Postgres no VPS; validação em ambiente limpo (2026-11-25)
+
+- **Postgres de produção = VPS (EasyPanel)**, não Neon, desde 2026-09-28 (entrada abaixo). `PROJECT-STATE.md` ainda descrevia o Neon como banco atual. Foram atualizadas as seções 2.1, 2.4, 2.5, 4.2, 8 (item 20), 9.1 e 10 (mais as menções nas seções 6 e 11). O que não dá para confirmar pelo código ficou marcado com ⚠: valores nos painéis da Vercel e do EasyPanel, firewall do VPS, se o banco do VPS veio do dump do Neon, `TimeZone`.
+- **`pgbouncer=true` não se aplica mais.** Era mitigação específica do endpoint `-pooler` do Neon (incidente de 2026-08-31). O Postgres do VPS usa conexão direta. A URL de produção local (`.env.vps.local`) foi conferida sem imprimir a senha e tem só `sslmode`, `sslaccept` e `connection_limit`. ⚠ Os painéis não foram verificados.
+- **Acesso ao banco de produção a partir da máquina de dev**: confirmado em `185.111.156.157:54329`, banco `wordbee`, TLS ok, só com `prisma migrate status` (leitura). Resultado: 9 de 10 migrations aplicadas, pendente só `20261125120000_add_ai_model_settings`. Por isso a migration desta entrega é aplicada **da máquina de dev, com o commit novo** (`npx dotenv -e .env.vps.local -- npx prisma migrate deploy`), e não do terminal do worker no EasyPanel: até o deploy, o container do worker ainda roda o código antigo e não tem a pasta da migration nova.
+- **`.env` local com credencial de produção inválida**: o `DATABASE_URL` do `.env` aponta para o mesmo host/porta de produção, mas a senha é recusada (`P1000`). Só o `.env.vps.local` autentica. Fica registrado como risco: com a senha corrigida, `npm run dev`, `db:migrate` e `db:seed` locais bateriam em produção. Recomendação: `.env` apontando para o Postgres local do `docker-compose.yml`.
+- **Causa raiz dos "65 erros de tipo do Prisma" e do build quebrado vistos mais cedo no mesmo dia**: `node_modules` local danificado (arquivos ausentes, por exemplo `next/dist/server/*.json`, e binários nativos do esbuild e do SWC apagados), não o código. Depois de `rm -rf node_modules && npm ci && npm run db:generate`, `typecheck`, `lint`, `test` (288/288) e `build` passaram limpos, sem nenhum ajuste de código. O estouro de pilha do `tsc` também sumiu. A causa da remoção dos arquivos não foi identificada (⚠). O sintoma é consistente com o macOS matando binários (exit 137) e com uma limpeza externa de `node_modules` por volta de 2026-11-15.
+
+---
+
 ## Modelo de IA configurável pelo painel, com fallback para env (2026-11-25)
 
 - **Decisão**: o model id (texto e imagem) passa a ser configurável na tela **Chaves de API → Modelos de IA**, salvo no banco (tabela `ai_model_settings`, uma linha por usuário). Ordem de resolução em `resolveModelId` (`packages/shared/src/ai/models.ts`): **painel → env → padrão do código**. Nulo ou vazio cai para o próximo nível, então "Voltar ao padrão" só grava nulo. Trocar o modelo não exige mais editar env nem redeploy.
